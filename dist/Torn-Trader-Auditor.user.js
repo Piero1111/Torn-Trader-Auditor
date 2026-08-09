@@ -985,21 +985,26 @@
 		style.textContent = `
 
         :root {
+
             --tw3b-bg: #14161c;
             --tw3b-surface: #1c1f28;
             --tw3b-surface-hover: #242832;
             --tw3b-border: #2c3140;
+
             --tw3b-text: #e6e8ec;
             --tw3b-text-muted: #8a8f9c;
 
             --tw3b-green: #2fbf71;
-            --tw3b-green-bg: rgba(47, 191, 113, 0.12);
+            --tw3b-green-bg:
+                rgba(47, 191, 113, 0.12);
 
             --tw3b-yellow: #e0b23e;
-            --tw3b-yellow-bg: rgba(224, 178, 62, 0.12);
+            --tw3b-yellow-bg:
+                rgba(224, 178, 62, 0.12);
 
             --tw3b-red: #e0473e;
-            --tw3b-red-bg: rgba(224, 71, 62, 0.12);
+            --tw3b-red-bg:
+                rgba(224, 71, 62, 0.12);
 
             --tw3b-accent: #4f8cff;
 
@@ -1020,12 +1025,13 @@
             position: fixed;
 
             /*
-             * La posición real será establecida
-             * por App mediante left/top.
+             * La posición será controlada por App.
              *
-             * Estas variables solamente sirven
-             * como posición inicial.
+             * No usar right/bottom al mismo tiempo
+             * que left/top cuando App ya estableció
+             * una posición.
              */
+
             left: auto;
             top: auto;
 
@@ -1035,6 +1041,14 @@
             width: 52px;
             height: 52px;
 
+            min-width: 52px;
+            min-height: 52px;
+
+            padding: 0;
+            margin: 0;
+
+            box-sizing: border-box;
+
             border-radius: 50%;
 
             background:
@@ -1043,6 +1057,7 @@
             color: #fff;
 
             display: flex;
+
             align-items: center;
             justify-content: center;
 
@@ -1056,10 +1071,40 @@
                 var(--tw3b-shadow);
 
             z-index: 99998;
+
+            /*
+             * MUY IMPORTANTE PARA MÓVIL.
+             *
+             * Impide que el navegador interprete
+             * el gesto como scroll/pan mientras
+             * el usuario arrastra el FAB.
+             */
+
             touch-action: none;
+
+            /*
+             * Evita selección de texto durante
+             * el arrastre.
+             */
+
             -webkit-user-select: none;
             user-select: none;
+
             -webkit-touch-callout: none;
+
+            /*
+             * Evita comportamientos nativos
+             * de drag en algunos navegadores.
+             */
+
+            -webkit-user-drag: none;
+
+            /*
+             * El FAB no debe provocar scroll
+             * accidentalmente.
+             */
+
+            overscroll-behavior: contain;
 
             transition:
                 transform 0.15s ease,
@@ -1067,27 +1112,96 @@
         }
 
 
+        /*
+         * Cualquier elemento interno del FAB
+         * tampoco debe capturar gestos táctiles.
+         */
+
+        .tw3b-fab * {
+
+            pointer-events: none;
+
+            -webkit-user-select: none;
+            user-select: none;
+
+            -webkit-user-drag: none;
+        }
+
+
         .tw3b-fab:active {
+
             cursor: grabbing;
         }
 
 
         .tw3b-fab:hover {
-            transform: scale(1.06);
+
+            transform:
+                scale(1.06);
         }
 
 
         /*
-         * Cuando App está moviendo el botón,
-         * evitamos animaciones que puedan
-         * interferir con el movimiento.
+         * Durante el arrastre NO queremos:
+         *
+         * - scale
+         * - transición
+         * - animación
+         *
+         * porque producen sensación de
+         * movimiento torpe.
          */
+
         .tw3b-fab.tw3b-dragging {
-            cursor: grabbing;
-            transition: none;
-            transform: none;
+
+            cursor:
+                grabbing;
+
+            transition:
+                none !important;
+
+            transform:
+                none !important;
+
+            box-shadow:
+                var(--tw3b-shadow);
+
+            /*
+             * Refuerza el comportamiento táctil.
+             */
+
+            touch-action:
+                none !important;
         }
 
+
+        /*
+         * Cuando se está arrastrando,
+         * el navegador no debe intentar
+         * seleccionar contenido.
+         */
+
+        body.tw3b-dragging {
+
+            -webkit-user-select:
+                none !important;
+
+            user-select:
+                none !important;
+
+            /*
+             * Evita scroll accidental durante
+             * el gesto de arrastre.
+             */
+
+            overscroll-behavior:
+                none;
+        }
+
+
+        /*
+         * Badge de alertas.
+         */
 
         .tw3b-fab.has-alerts::after {
 
@@ -1108,6 +1222,9 @@
 
             border:
                 2px solid var(--tw3b-bg);
+
+            pointer-events:
+                none;
         }
 
 
@@ -1119,11 +1236,6 @@
 
             position: fixed;
 
-            /*
-             * App establece left/top dinámicamente
-             * para que el panel permanezca junto
-             * al botón flotante.
-             */
             left: auto;
             top: auto;
 
@@ -1180,6 +1292,14 @@
 
             pointer-events:
                 none;
+
+            /*
+             * El panel sí debe permitir
+             * interacción táctil normal.
+             */
+
+            touch-action:
+                auto;
         }
 
 
@@ -1196,28 +1316,31 @@
         }
 
 
-        /*
-         * Evita que el panel se salga de la
-         * pantalla cuando el FAB está cerca
-         * de un borde.
-         */
         .tw3b-panel.tw3b-panel-left {
-            transform-origin: right center;
+
+            transform-origin:
+                right center;
         }
 
 
         .tw3b-panel.tw3b-panel-right {
-            transform-origin: left center;
+
+            transform-origin:
+                left center;
         }
 
 
         .tw3b-panel.tw3b-panel-top {
-            transform-origin: center bottom;
+
+            transform-origin:
+                center bottom;
         }
 
 
         .tw3b-panel.tw3b-panel-bottom {
-            transform-origin: center top;
+
+            transform-origin:
+                center top;
         }
 
 
@@ -1264,6 +1387,17 @@
 
             flex:
                 1;
+
+            /*
+             * Permitir scroll vertical normal
+             * dentro del panel.
+             */
+
+            touch-action:
+                pan-y;
+
+            -webkit-overflow-scrolling:
+                touch;
         }
 
 
@@ -1313,7 +1447,7 @@
 
 
         /* =====================================================
-         * SEARCH SUGGESTIONS
+         * SEARCH WRAPPER
          * ===================================================== */
 
         .tw3b-search-wrapper {
@@ -1357,6 +1491,12 @@
 
             z-index:
                 100000;
+
+            touch-action:
+                pan-y;
+
+            -webkit-overflow-scrolling:
+                touch;
         }
 
 
@@ -1382,6 +1522,9 @@
 
             font-size:
                 12px;
+
+            touch-action:
+                manipulation;
         }
 
 
@@ -1482,6 +1625,9 @@
 
             justify-content:
                 center;
+
+            touch-action:
+                manipulation;
         }
 
 
@@ -1590,6 +1736,9 @@
             transition:
                 background 0.12s ease,
                 border-color 0.12s ease;
+
+            touch-action:
+                manipulation;
         }
 
 
@@ -1692,6 +1841,9 @@
             transition:
                 border-color 0.12s ease,
                 background 0.12s ease;
+
+            touch-action:
+                manipulation;
         }
 
 
@@ -1812,6 +1964,9 @@
 
             transition:
                 opacity 0.12s ease;
+
+            touch-action:
+                manipulation;
         }
 
 
@@ -1895,11 +2050,13 @@
         @keyframes tw3b-shimmer {
 
             0% {
+
                 background-position:
                     100% 50%;
             }
 
             100% {
+
                 background-position:
                     0 50%;
             }
@@ -1935,6 +2092,9 @@
 
             padding:
                 2px 0;
+
+            touch-action:
+                manipulation;
         }
 
 
@@ -1965,10 +2125,55 @@
             .tw3b-panel {
 
                 width:
-                    min(340px, calc(100vw - 20px));
+                    min(
+                        340px,
+                        calc(100vw - 20px)
+                    );
 
                 max-height:
                     75vh;
+            }
+
+
+            .tw3b-fab {
+
+                width:
+                    52px;
+
+                height:
+                    52px;
+
+                min-width:
+                    52px;
+
+                min-height:
+                    52px;
+            }
+        }
+
+
+        /*
+         * =====================================================
+         * REDUCIR MOVIMIENTO
+         * =====================================================
+         */
+
+        @media (prefers-reduced-motion: reduce) {
+
+            .tw3b-fab,
+            .tw3b-panel,
+            .tw3b-menu-item,
+            .tw3b-card,
+            .tw3b-button {
+
+                transition:
+                    none !important;
+            }
+
+            .tw3b-skeleton {
+
+                animation:
+                    none !important;
             }
         }
 
@@ -2000,6 +2205,9 @@
 		HISTORY: "history",
 		SETTINGS: "settings"
 	};
+	var FAB_ID = "tornw3b-fab";
+	var PANEL_ID = "tornw3b-panel";
+	var APP_INSTANCE_KEY = "__TornW3B_App_Instance__";
 	var App = class {
 		constructor(ctx, views = {}) {
 			this.ctx = ctx;
@@ -2011,35 +2219,122 @@
 			this.panelBody = null;
 			this.searchInput = null;
 			this.iconBar = null;
+			this.mounted = false;
+			this.destroyed = false;
 			this.fabPositionKey = "tornw3b-fab-position";
 			this.isDraggingFab = false;
 			this.fabDragOffsetX = 0;
 			this.fabDragOffsetY = 0;
 			this.fabWasDragged = false;
-			this.fabPointerMoved = false;
+			this.boundResize = null;
+			this.boundFabPointerDown = null;
+			this.boundFabPointerMove = null;
+			this.boundFabPointerUp = null;
+			this.boundFabPointerCancel = null;
+			this.boundFabClick = null;
 		}
 		mount() {
+			if (this.mounted) {
+				console.warn("[TornW3B] App.mount() ignorado: la aplicación ya está montada.");
+				return;
+			}
+			const previousApp = window[APP_INSTANCE_KEY];
+			if (previousApp && previousApp !== this && typeof previousApp.destroy === "function") {
+				console.warn("[TornW3B] Se detectó una instancia anterior. Destruyéndola antes de montar la nueva.");
+				try {
+					previousApp.destroy();
+				} catch (error) {
+					console.warn("[TornW3B] Error destruyendo instancia anterior:", error);
+				}
+			}
+			document.querySelectorAll(`#${FAB_ID}`).forEach((element) => {
+				element.remove();
+			});
+			document.querySelectorAll(`#${PANEL_ID}`).forEach((element) => {
+				element.remove();
+			});
+			window[APP_INSTANCE_KEY] = this;
+			this.mounted = true;
+			this.destroyed = false;
 			injectStyles();
 			this.fab = document.createElement("button");
+			this.fab.id = FAB_ID;
 			this.fab.className = "tw3b-fab";
 			this.fab.type = "button";
 			this.fab.innerHTML = "💰";
 			this.fab.setAttribute("aria-label", "Abrir TornW3B Trader");
+			this.fab.style.touchAction = "none";
+			this.loadFabPosition();
+			this.enableFabDragging();
 			this.panel = document.createElement("div");
+			this.panel.id = PANEL_ID;
 			this.panel.className = "tw3b-panel";
 			this.panelBody = document.createElement("div");
 			this.panelBody.className = "tw3b-panel-body";
 			this.panel.appendChild(this.panelBody);
 			document.body.appendChild(this.fab);
 			document.body.appendChild(this.panel);
-			this.loadFabPosition();
-			this.enableFabDragging();
-			window.addEventListener("resize", () => {
+			this.boundResize = () => {
+				if (this.destroyed) return;
 				this.keepFabInsideViewport();
-				if (this.panel.classList.contains("open")) this.updatePanelPosition();
-			});
+				if (this.panel && this.panel.classList.contains("open")) this.updatePanelPosition();
+			};
+			window.addEventListener("resize", this.boundResize);
 			this.renderMenu();
 			this.refreshAlertBadge();
+		}
+		destroy() {
+			if (this.destroyed) return;
+			this.destroyed = true;
+			this.mounted = false;
+			if (this.activeViewInstance && typeof this.activeViewInstance.destroy === "function") try {
+				this.activeViewInstance.destroy();
+			} catch (error) {
+				console.warn("[TornW3B] Error destruyendo vista:", error);
+			}
+			this.activeViewInstance = null;
+			if (this.boundResize) {
+				window.removeEventListener("resize", this.boundResize);
+				this.boundResize = null;
+			}
+			this.removeFabListeners();
+			if (this.fab && this.fab.parentNode) this.fab.parentNode.removeChild(this.fab);
+			if (this.panel && this.panel.parentNode) this.panel.parentNode.removeChild(this.panel);
+			this.fab = null;
+			this.panel = null;
+			this.panelBody = null;
+			this.searchInput = null;
+			this.iconBar = null;
+			document.querySelectorAll(`#${FAB_ID}`).forEach((element) => {
+				element.remove();
+			});
+			document.querySelectorAll(`#${PANEL_ID}`).forEach((element) => {
+				element.remove();
+			});
+			if (window[APP_INSTANCE_KEY] === this) window[APP_INSTANCE_KEY] = null;
+		}
+		removeFabListeners() {
+			if (!this.fab) return;
+			if (this.boundFabPointerDown) {
+				this.fab.removeEventListener("pointerdown", this.boundFabPointerDown);
+				this.boundFabPointerDown = null;
+			}
+			if (this.boundFabPointerMove) {
+				this.fab.removeEventListener("pointermove", this.boundFabPointerMove);
+				this.boundFabPointerMove = null;
+			}
+			if (this.boundFabPointerUp) {
+				this.fab.removeEventListener("pointerup", this.boundFabPointerUp);
+				this.boundFabPointerUp = null;
+			}
+			if (this.boundFabPointerCancel) {
+				this.fab.removeEventListener("pointercancel", this.boundFabPointerCancel);
+				this.boundFabPointerCancel = null;
+			}
+			if (this.boundFabClick) {
+				this.fab.removeEventListener("click", this.boundFabClick);
+				this.boundFabClick = null;
+			}
 		}
 		loadFabPosition() {
 			if (!this.fab) return;
@@ -2047,14 +2342,11 @@
 				const raw = localStorage.getItem(this.fabPositionKey);
 				if (!raw) return;
 				const position = JSON.parse(raw);
-				const left = Number(position?.left);
-				const top = Number(position?.top);
-				if (!Number.isFinite(left) || !Number.isFinite(top)) return;
-				this.fab.style.left = `${left}px`;
-				this.fab.style.top = `${top}px`;
+				if (!position || !Number.isFinite(Number(position.left)) || !Number.isFinite(Number(position.top))) return;
+				this.fab.style.left = `${Number(position.left)}px`;
+				this.fab.style.top = `${Number(position.top)}px`;
 				this.fab.style.right = "auto";
 				this.fab.style.bottom = "auto";
-				this.keepFabInsideViewport();
 			} catch (error) {
 				console.warn("[TornW3B] No se pudo recuperar la posición del botón:", error);
 			}
@@ -2074,34 +2366,33 @@
 		keepFabInsideViewport() {
 			if (!this.fab) return;
 			const rect = this.fab.getBoundingClientRect();
+			if (!(this.fab.style.left || this.fab.style.top)) return;
 			const width = this.fab.offsetWidth;
 			const height = this.fab.offsetHeight;
-			if (!(this.fab.style.left !== "" && this.fab.style.top !== "")) return;
 			let left = rect.left;
 			let top = rect.top;
-			const maxLeft = Math.max(0, window.innerWidth - width);
-			const maxTop = Math.max(0, window.innerHeight - height);
-			left = Math.max(0, Math.min(left, maxLeft));
-			top = Math.max(0, Math.min(top, maxTop));
-			this.fab.style.left = `${Math.round(left)}px`;
-			this.fab.style.top = `${Math.round(top)}px`;
+			left = Math.max(0, Math.min(left, window.innerWidth - width));
+			top = Math.max(0, Math.min(top, window.innerHeight - height));
+			this.fab.style.left = `${left}px`;
+			this.fab.style.top = `${top}px`;
 			this.fab.style.right = "auto";
 			this.fab.style.bottom = "auto";
 			this.saveFabPosition();
 		}
 		enableFabDragging() {
+			if (!this.fab) return;
 			let pointerMoved = false;
-			let startX = 0;
-			let startY = 0;
+			let pointerDownX = 0;
+			let pointerDownY = 0;
 			const DRAG_THRESHOLD = 6;
-			this.fab.addEventListener("pointerdown", (event) => {
+			this.boundFabPointerDown = (event) => {
+				if (this.destroyed) return;
 				if (event.pointerType === "mouse" && event.button !== 0) return;
-				event.preventDefault();
 				this.isDraggingFab = true;
 				pointerMoved = false;
 				this.fabWasDragged = false;
-				startX = event.clientX;
-				startY = event.clientY;
+				pointerDownX = event.clientX;
+				pointerDownY = event.clientY;
 				const rect = this.fab.getBoundingClientRect();
 				this.fabDragOffsetX = event.clientX - rect.left;
 				this.fabDragOffsetY = event.clientY - rect.top;
@@ -2112,17 +2403,14 @@
 				try {
 					this.fab.setPointerCapture(event.pointerId);
 				} catch {}
-			}, { passive: false });
-			this.fab.addEventListener("pointermove", (event) => {
+			};
+			this.boundFabPointerMove = (event) => {
 				if (!this.isDraggingFab) return;
-				event.preventDefault();
-				const deltaX = event.clientX - startX;
-				const deltaY = event.clientY - startY;
-				if (Math.sqrt(deltaX * deltaX + deltaY * deltaY) >= DRAG_THRESHOLD) {
-					pointerMoved = true;
-					this.fabWasDragged = true;
-				}
-				if (!pointerMoved) return;
+				const deltaX = Math.abs(event.clientX - pointerDownX);
+				const deltaY = Math.abs(event.clientY - pointerDownY);
+				if (!pointerMoved && deltaX < DRAG_THRESHOLD && deltaY < DRAG_THRESHOLD) return;
+				pointerMoved = true;
+				this.fabWasDragged = true;
 				const width = this.fab.offsetWidth;
 				const height = this.fab.offsetHeight;
 				let left = event.clientX - this.fabDragOffsetX;
@@ -2134,78 +2422,85 @@
 				this.fab.style.right = "auto";
 				this.fab.style.bottom = "auto";
 				if (this.panel && this.panel.classList.contains("open")) this.updatePanelPosition();
-			}, { passive: false });
-			this.fab.addEventListener("pointerup", (event) => {
+				if (event.cancelable) event.preventDefault();
+			};
+			this.boundFabPointerUp = (event) => {
 				if (!this.isDraggingFab) return;
-				event.preventDefault();
 				this.isDraggingFab = false;
 				try {
-					this.fab.releasePointerCapture(event.pointerId);
+					if (this.fab.hasPointerCapture(event.pointerId)) this.fab.releasePointerCapture(event.pointerId);
 				} catch {}
 				if (pointerMoved) {
 					this.saveFabPosition();
 					if (this.panel && this.panel.classList.contains("open")) this.updatePanelPosition();
 					setTimeout(() => {
-						this.fabWasDragged = false;
-					}, 150);
+						if (!this.destroyed) this.fabWasDragged = false;
+					}, 100);
 				}
-			}, { passive: false });
-			this.fab.addEventListener("pointercancel", (event) => {
+			};
+			this.boundFabPointerCancel = (event) => {
 				if (!this.isDraggingFab) return;
-				event.preventDefault();
 				this.isDraggingFab = false;
-				if (pointerMoved) this.saveFabPosition();
-				pointerMoved = false;
+				this.saveFabPosition();
 				this.fabWasDragged = false;
-			}, { passive: false });
-			this.fab.addEventListener("click", (event) => {
+				try {
+					if (this.fab.hasPointerCapture(event.pointerId)) this.fab.releasePointerCapture(event.pointerId);
+				} catch {}
+			};
+			this.boundFabClick = (event) => {
 				if (this.fabWasDragged) {
 					event.preventDefault();
 					event.stopPropagation();
 					return;
 				}
 				this.toggle();
-			});
+			};
+			this.fab.addEventListener("pointerdown", this.boundFabPointerDown);
+			this.fab.addEventListener("pointermove", this.boundFabPointerMove, { passive: false });
+			this.fab.addEventListener("pointerup", this.boundFabPointerUp);
+			this.fab.addEventListener("pointercancel", this.boundFabPointerCancel);
+			this.fab.addEventListener("click", this.boundFabClick);
 		}
 		updatePanelPosition() {
 			if (!this.fab || !this.panel) return;
 			const fabRect = this.fab.getBoundingClientRect();
-			const panelWidth = this.panel.offsetWidth || 340;
+			const panelWidth = this.panel.offsetWidth || 320;
 			const panelHeight = this.panel.offsetHeight || 400;
 			const gap = 10;
-			const margin = 8;
 			let left = fabRect.left;
-			left = Math.min(left, window.innerWidth - panelWidth - margin);
-			left = Math.max(margin, left);
 			let top;
-			const spaceBelow = window.innerHeight - fabRect.bottom - gap - margin;
-			const spaceAbove = fabRect.top - gap - margin;
-			if (spaceBelow >= panelHeight) top = fabRect.bottom + gap;
-			else if (spaceAbove >= panelHeight) top = fabRect.top - panelHeight - gap;
-			else top = Math.max(margin, Math.min(fabRect.bottom + gap, window.innerHeight - panelHeight - margin));
-			this.panel.style.left = `${Math.round(left)}px`;
-			this.panel.style.top = `${Math.round(top)}px`;
+			if (fabRect.bottom + gap + panelHeight <= window.innerHeight) top = fabRect.bottom + gap;
+			else top = fabRect.top - panelHeight - gap;
+			left = Math.max(8, Math.min(left, window.innerWidth - panelWidth - 8));
+			top = Math.max(8, Math.min(top, window.innerHeight - panelHeight - 8));
+			this.panel.style.left = `${left}px`;
+			this.panel.style.top = `${top}px`;
 			this.panel.style.right = "auto";
 			this.panel.style.bottom = "auto";
 		}
 		toggle() {
+			if (!this.panel) return;
 			if (this.panel.classList.contains("open")) this.close();
 			else this.open();
 		}
 		open() {
+			if (this.destroyed || !this.panel) return;
 			this.panel.classList.add("open");
 			requestAnimationFrame(() => {
+				if (this.destroyed) return;
 				this.updatePanelPosition();
 			});
 			if (this.searchInput) setTimeout(() => {
-				this.searchInput.focus();
+				if (!this.destroyed && this.searchInput) this.searchInput.focus();
 			}, 100);
 		}
 		close() {
+			if (!this.panel) return;
 			this.panel.classList.remove("open");
 			this.hideSuggestions();
 		}
 		renderMenu() {
+			if (this.destroyed || !this.panelBody) return;
 			this.currentView = VIEWS.MENU;
 			this.activeViewInstance = null;
 			this.panelBody.innerHTML = "";
@@ -2270,6 +2565,7 @@
 			return button;
 		}
 		handleSearch(query) {
+			if (this.destroyed) return;
 			const searchModule = this.views.search;
 			if (!searchModule || typeof searchModule.onQuery !== "function") return;
 			searchModule.onQuery(query, this.ctx, async (item) => {
@@ -2277,7 +2573,7 @@
 			}, this.searchInput);
 		}
 		async selectSearchItem(item) {
-			if (!item) return;
+			if (!item || this.destroyed) return;
 			this.hideSuggestions();
 			if (!this.ctx.scheduler) {
 				console.warn("[TornW3B] Scheduler todavía no está disponible.");
@@ -2301,6 +2597,7 @@
 			}
 		}
 		showLoading(itemName) {
+			if (this.destroyed || !this.panelBody) return;
 			this.panelBody.innerHTML = `
 
             <div class="tw3b-loading">
@@ -2320,6 +2617,7 @@
         `;
 		}
 		showError(itemName, message) {
+			if (this.destroyed || !this.panelBody) return;
 			this.panelBody.innerHTML = `
 
             <div class="tw3b-error-view">
@@ -2344,9 +2642,12 @@
 
         `;
 			const back = this.panelBody.querySelector("[data-action=\"back-menu\"]");
-			if (back) back.addEventListener("click", () => this.renderMenu());
+			if (back) back.addEventListener("click", () => {
+				this.renderMenu();
+			});
 		}
 		async navigate(viewName, params = {}) {
+			if (this.destroyed) return;
 			if (this.activeViewInstance && typeof this.activeViewInstance.destroy === "function") this.activeViewInstance.destroy();
 			this.activeViewInstance = null;
 			this.currentView = viewName;
@@ -2377,8 +2678,8 @@
 			this.activeViewInstance = await view.render(container, this.ctx, (nextView, nextParams) => {
 				this.navigate(nextView, nextParams);
 			}, params) || null;
-			if (this.panel.classList.contains("open")) requestAnimationFrame(() => {
-				this.updatePanelPosition();
+			if (this.panel && this.panel.classList.contains("open")) requestAnimationFrame(() => {
+				if (!this.destroyed) this.updatePanelPosition();
 			});
 		}
 		hideSuggestions() {
@@ -2386,10 +2687,11 @@
 			if (suggestions) suggestions.style.display = "none";
 		}
 		async refreshAlertBadge() {
-			if (!this.ctx.storage) return;
+			if (this.destroyed || !this.ctx.storage) return;
 			try {
 				const audits = await this.ctx.storage.getAllAudits();
-				const alertCount = Object.values(audits || {}).filter((audit) => audit && (audit.status === "RED" || audit.status === "YELLOW")).length;
+				const alertCount = Object.values(audits).filter((audit) => audit && (audit.status === "RED" || audit.status === "YELLOW")).length;
+				if (!this.panelBody) return;
 				const badge = this.panelBody.querySelector("#tw3b-alert-count");
 				if (badge) {
 					badge.textContent = String(alertCount);
@@ -3101,14 +3403,36 @@
 	};
 	//#endregion
 	//#region src/main.js
+	var GLOBAL_START_KEY = "__TORNW3B_START_PROMISE__";
+	if (window.TornW3B && window.TornW3B.__initialized) console.log("[TornW3B] Ya existe una instancia activa. Se evita una segunda inicialización.");
+	else if (window[GLOBAL_START_KEY]) console.log("[TornW3B] Inicialización ya en progreso.");
+	else {
+		window[GLOBAL_START_KEY] = start();
+		window[GLOBAL_START_KEY].catch((error) => {
+			console.error("[TornW3B] Error fatal al iniciar:", error);
+		}).finally(() => {
+			if (!window.TornW3B || !window.TornW3B.__initialized) delete window[GLOBAL_START_KEY];
+		});
+	}
 	async function start() {
+		if (window.TornW3B && window.TornW3B.__initialized) {
+			console.log("[TornW3B] La aplicación ya está inicializada.");
+			return window.TornW3B;
+		}
+		cleanupPreviousApp();
 		const storage = new Storage();
 		const config = await storage.getConfig();
 		const app = buildApp(storage, config);
 		app.mount();
 		if (!config.tornApiKey || !config.w3bUserId) {
 			console.warn("[TornW3B] Faltan credenciales — abrí Configuración desde el menú para ingresarlas.");
-			return;
+			window.TornW3B = {
+				app,
+				storage,
+				config,
+				__initialized: true
+			};
+			return window.TornW3B;
 		}
 		const tornAPI = new TornAPI(config.tornApiKey);
 		const w3bAPI = new W3BAPI(config.w3bApiKey);
@@ -3164,19 +3488,23 @@
 		});
 		scheduler.start();
 		await app.refreshAlertBadge();
-		window.TornW3B = {
+		const instance = {
 			tornAPI,
 			w3bAPI,
 			storage,
+			config,
 			pricelist,
 			marketAnalyzer,
 			ratioLearner,
 			auditor,
 			history,
 			scheduler,
-			app
+			app,
+			__initialized: true
 		};
+		window.TornW3B = instance;
 		console.log("[TornW3B] Sistema iniciado correctamente");
+		return instance;
 	}
 	function buildApp(storage, config) {
 		return new App({
@@ -3190,8 +3518,27 @@
 			settings: settingsView
 		});
 	}
-	start().catch((error) => {
-		console.error("[TornW3B] Error fatal al iniciar:", error);
-	});
+	function cleanupPreviousApp() {
+		const previous = window.TornW3B;
+		if (previous) {
+			try {
+				if (previous.scheduler && typeof previous.scheduler.stop === "function") previous.scheduler.stop();
+			} catch (error) {
+				console.warn("[TornW3B] Error deteniendo Scheduler anterior:", error);
+			}
+			try {
+				if (previous.app && typeof previous.app.destroy === "function") previous.app.destroy();
+			} catch (error) {
+				console.warn("[TornW3B] Error destruyendo App anterior:", error);
+			}
+		}
+		document.querySelectorAll(".tw3b-fab").forEach((element) => {
+			element.remove();
+		});
+		document.querySelectorAll(".tw3b-panel").forEach((element) => {
+			element.remove();
+		});
+		delete window.TornW3B;
+	}
 	//#endregion
 })();

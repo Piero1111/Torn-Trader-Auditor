@@ -22,35 +22,143 @@ import { historyView } from "./ui/historyView.js";
 import { settingsView } from "./ui/settingsView.js";
 
 
+/*
+ * =========================================================
+ * PROTECCIÓN CONTRA DOBLE INICIALIZACIÓN
+ * =========================================================
+ *
+ * TornW3B puede ser inyectado más de una vez
+ * por TornPDA / navegador / recarga parcial.
+ *
+ * Si ya existe una inicialización en progreso,
+ * reutilizamos esa Promise.
+ */
+
+const GLOBAL_START_KEY =
+    "__TORNW3B_START_PROMISE__";
+
+
+/*
+ * Si ya existe una instancia completamente
+ * inicializada, no crear otra.
+ */
+
+if (
+    window.TornW3B &&
+    window.TornW3B.__initialized
+) {
+
+    console.log(
+        "[TornW3B] Ya existe una instancia activa. " +
+        "Se evita una segunda inicialización."
+    );
+
+} else if (
+    window[GLOBAL_START_KEY]
+) {
+
+    console.log(
+        "[TornW3B] Inicialización ya en progreso."
+    );
+
+} else {
+
+    window[GLOBAL_START_KEY] =
+        start();
+
+    window[GLOBAL_START_KEY]
+        .catch(
+            error => {
+
+                console.error(
+                    "[TornW3B] Error fatal al iniciar:",
+                    error
+                );
+
+            }
+        )
+        .finally(
+            () => {
+
+                /*
+                 * La Promise se conserva si la aplicación
+                 * quedó correctamente inicializada.
+                 *
+                 * Si hubo un error antes de completar
+                 * la inicialización, permitimos reintentar.
+                 */
+
+                if (
+                    !window.TornW3B ||
+                    !window.TornW3B.__initialized
+                ) {
+
+                    delete window[
+                        GLOBAL_START_KEY
+                    ];
+                }
+            }
+        );
+}
+
+
+/*
+ * =========================================================
+ * START
+ * =========================================================
+ */
+
 async function start() {
 
     /*
-     * =========================================================
+     * =====================================================
+     * DOBLE COMPROBACIÓN
+     * =====================================================
+     */
+
+    if (
+        window.TornW3B &&
+        window.TornW3B.__initialized
+    ) {
+
+        console.log(
+            "[TornW3B] La aplicación ya está inicializada."
+        );
+
+        return window.TornW3B;
+    }
+
+
+    /*
+     * =====================================================
+     * LIMPIAR INSTANCIA ANTERIOR
+     * =====================================================
+     *
+     * Si existe una App vieja pero no quedó marcada
+     * como completamente inicializada, la destruimos.
+     */
+
+    cleanupPreviousApp();
+
+
+    /*
+     * =====================================================
      * STORAGE + CONFIG
-     * =========================================================
+     * =====================================================
      */
 
     const storage =
         new Storage();
+
 
     const config =
         await storage.getConfig();
 
 
     /*
-     * =========================================================
+     * =====================================================
      * APP
-     * =========================================================
-     *
-     * Creamos la aplicación desde el principio.
-     *
-     * El contexto comienza solamente con:
-     *
-     *     storage
-     *     config
-     *
-     * Las demás dependencias se agregan
-     * cuando terminan de inicializarse.
+     * =====================================================
      */
 
     const app =
@@ -60,13 +168,17 @@ async function start() {
         );
 
 
+    /*
+     * Montar solamente una vez.
+     */
+
     app.mount();
 
 
     /*
-     * =========================================================
+     * =====================================================
      * CREDENCIALES
-     * =========================================================
+     * =====================================================
      */
 
     if (
@@ -79,14 +191,32 @@ async function start() {
             "abrí Configuración desde el menú para ingresarlas."
         );
 
-        return;
+
+        /*
+         * Guardamos la instancia aunque
+         * todavía no esté completamente inicializada.
+         */
+
+        window.TornW3B = {
+
+            app,
+
+            storage,
+
+            config,
+
+            __initialized: true
+        };
+
+
+        return window.TornW3B;
     }
 
 
     /*
-     * =========================================================
+     * =====================================================
      * DEPENDENCIAS
-     * =========================================================
+     * =====================================================
      */
 
     const tornAPI =
@@ -135,30 +265,26 @@ async function start() {
 
 
     /*
-     * =========================================================
+     * =====================================================
      * SCHEDULER
-     * =========================================================
-     *
-     * El Scheduler ahora se encarga de:
-     *
-     * 1. Auditoría prioritaria al buscar un artículo.
-     *
-     * 2. Utilizar cache si fue auditado hace menos
-     *    de CONFIG.AUDIT_INTERVAL.
-     *
-     * 3. Auditoría pasiva periódica.
-     *
-     * 4. Procesamiento progresivo de artículos.
-     *
-     * 5. Evitar auditorías duplicadas.
+     * =====================================================
      */
 
     const scheduler =
         new Scheduler({
+
             auditor,
+
             pricelist,
+
             storage,
+
             history,
+
+            /*
+             * Mantener 1 para evitar
+             * sobrecargar las APIs.
+             */
             concurrency: 1
         });
 
@@ -169,9 +295,9 @@ async function start() {
 
 
     /*
-     * =========================================================
+     * =====================================================
      * SINCRONIZAR PRICELIST
-     * =========================================================
+     * =====================================================
      */
 
     try {
@@ -203,39 +329,31 @@ async function start() {
 
 
     /*
-     * =========================================================
+     * =====================================================
      * HISTORY
-     * =========================================================
+     * =====================================================
      */
 
     await history.init();
 
 
     /*
-     * =========================================================
+     * =====================================================
      * SCHEDULER INIT
-     * =========================================================
-     *
-     * Recupera:
-     *
-     * - timestamps de auditorías existentes
-     * - artículos inválidos
-     *
-     * IMPORTANTE:
-     * todavía NO comienza la auditoría pasiva.
+     * =====================================================
      */
 
     await scheduler.init();
 
 
     /*
-     * =========================================================
-     * CALLBACKS DEL SCHEDULER
-     * =========================================================
+     * =====================================================
+     * CALLBACKS
+     * =====================================================
      */
 
     scheduler.onAuditComplete =
-        (result) => {
+        result => {
 
             console.log(
                 `[TornW3B] Auditoría completa: ` +
@@ -244,8 +362,7 @@ async function start() {
 
 
             /*
-             * Actualizar inmediatamente
-             * el contador del icono de auditoría.
+             * Actualizar badge.
              */
 
             app.refreshAlertBadge();
@@ -263,15 +380,9 @@ async function start() {
 
 
     /*
-     * =========================================================
-     * INYECTAR DEPENDENCIAS EN APP
-     * =========================================================
-     *
-     * app.ctx es el mismo objeto que fue creado
-     * originalmente por buildApp().
-     *
-     * Al hacer Object.assign() agregamos todas
-     * las dependencias sin reconstruir la App.
+     * =====================================================
+     * INYECTAR DEPENDENCIAS
+     * =====================================================
      */
 
     Object.assign(
@@ -298,56 +409,50 @@ async function start() {
 
 
     /*
-     * =========================================================
-     * INICIAR AUDITORÍA PASIVA
-     * =========================================================
+     * =====================================================
+     * INICIAR SCHEDULER
+     * =====================================================
      *
-     * AHORA SÍ iniciamos el Scheduler.
+     * El Scheduler se encarga de:
      *
-     * Esto NO significa:
-     *
-     *     auditar 1000 artículos inmediatamente.
-     *
-     * El Scheduler solamente:
-     *
-     *     - toma una pequeña tanda
-     *     - respeta la cola
-     *     - respeta concurrency
-     *     - espera CONFIG.AUDIT_INTERVAL
-     *     - vuelve a revisar artículos pendientes
-     *
-     * Mientras tanto, una búsqueda puede poner
-     * un artículo al frente de la cola mediante
-     * getOrAudit().
+     * - ciclo pasivo horario
+     * - completar todos los artículos
+     * - prioridad de búsquedas
+     * - continuar la pasiva después
+     *   de una auditoría prioritaria
+     * - evitar duplicados
      */
 
     scheduler.start();
 
 
     /*
-     * Actualizar el badge una vez que
-     * todo está inicializado.
+     * =====================================================
+     * BADGE INICIAL
+     * =====================================================
      */
 
     await app.refreshAlertBadge();
 
 
     /*
-     * =========================================================
-     * API GLOBAL DE DEBUG
-     * =========================================================
+     * =====================================================
+     * API GLOBAL
+     * =====================================================
      *
-     * Permite inspeccionar el sistema desde
-     * la consola del navegador.
+     * IMPORTANTE:
+     * Marcamos la instancia como inicializada.
      */
 
-    window.TornW3B = {
+    const instance = {
 
         tornAPI,
 
         w3bAPI,
 
         storage,
+
+        config,
 
         pricelist,
 
@@ -361,13 +466,22 @@ async function start() {
 
         scheduler,
 
-        app
+        app,
+
+        __initialized: true
     };
+
+
+    window.TornW3B =
+        instance;
 
 
     console.log(
         "[TornW3B] Sistema iniciado correctamente"
     );
+
+
+    return instance;
 }
 
 
@@ -392,16 +506,6 @@ function buildApp(
 
     /*
      * Cada módulo mantiene su propia vista.
-     *
-     * App solamente se encarga de:
-     *
-     * - navegación
-     * - panel
-     * - FAB
-     * - conexión búsqueda → Scheduler → SaleView
-     *
-     * La lógica interna de cada pantalla
-     * permanece en su propio archivo.
      */
 
     const views = {
@@ -427,16 +531,116 @@ function buildApp(
 
 /*
  * =========================================================
- * START
+ * CLEANUP PREVIOUS APP
+ * =========================================================
+ *
+ * Elimina una instancia anterior del DOM.
+ *
+ * Esto es especialmente importante en TornPDA,
+ * donde el script puede volver a ejecutarse sin
+ * que la página completa se recargue.
  * =========================================================
  */
 
-start().catch(
-    (error) => {
+function cleanupPreviousApp() {
 
-        console.error(
-            "[TornW3B] Error fatal al iniciar:",
-            error
-        );
+    /*
+     * Si existe una instancia anterior,
+     * intentamos detener su Scheduler.
+     */
+
+    const previous =
+        window.TornW3B;
+
+
+    if (
+        previous
+    ) {
+
+        try {
+
+            if (
+                previous.scheduler &&
+                typeof previous.scheduler.stop ===
+                "function"
+            ) {
+
+                previous.scheduler.stop();
+            }
+
+        } catch (error) {
+
+            console.warn(
+                "[TornW3B] Error deteniendo Scheduler anterior:",
+                error
+            );
+        }
+
+
+        /*
+         * Si la App dispone de destroy(),
+         * utilizarlo.
+         */
+
+        try {
+
+            if (
+                previous.app &&
+                typeof previous.app.destroy ===
+                "function"
+            ) {
+
+                previous.app.destroy();
+            }
+
+        } catch (error) {
+
+            console.warn(
+                "[TornW3B] Error destruyendo App anterior:",
+                error
+            );
+        }
     }
-);
+
+
+    /*
+     * =====================================================
+     * ELIMINAR FAB/PANEL RESIDUALES
+     * =====================================================
+     *
+     * Usamos selectores específicos para no tocar
+     * elementos pertenecientes a TornPDA.
+     */
+
+    document
+        .querySelectorAll(
+            ".tw3b-fab"
+        )
+        .forEach(
+            element => {
+
+                element.remove();
+
+            }
+        );
+
+
+    document
+        .querySelectorAll(
+            ".tw3b-panel"
+        )
+        .forEach(
+            element => {
+
+                element.remove();
+
+            }
+        );
+
+
+    /*
+     * Limpiar referencia global.
+     */
+
+    delete window.TornW3B;
+}

@@ -1,11 +1,17 @@
-
 export const STYLE_ID = "tornw3b-styles";
 
 export function injectStyles() {
 
+    /*
+     * =========================================================
+     * EVITAR DUPLICACIÓN DE ESTILOS
+     * =========================================================
+     */
+
     if (document.getElementById(STYLE_ID)) {
         return;
     }
+
 
     const style =
         document.createElement("style");
@@ -17,21 +23,26 @@ export function injectStyles() {
     style.textContent = `
 
         :root {
+
             --tw3b-bg: #14161c;
             --tw3b-surface: #1c1f28;
             --tw3b-surface-hover: #242832;
             --tw3b-border: #2c3140;
+
             --tw3b-text: #e6e8ec;
             --tw3b-text-muted: #8a8f9c;
 
             --tw3b-green: #2fbf71;
-            --tw3b-green-bg: rgba(47, 191, 113, 0.12);
+            --tw3b-green-bg:
+                rgba(47, 191, 113, 0.12);
 
             --tw3b-yellow: #e0b23e;
-            --tw3b-yellow-bg: rgba(224, 178, 62, 0.12);
+            --tw3b-yellow-bg:
+                rgba(224, 178, 62, 0.12);
 
             --tw3b-red: #e0473e;
-            --tw3b-red-bg: rgba(224, 71, 62, 0.12);
+            --tw3b-red-bg:
+                rgba(224, 71, 62, 0.12);
 
             --tw3b-accent: #4f8cff;
 
@@ -52,12 +63,13 @@ export function injectStyles() {
             position: fixed;
 
             /*
-             * La posición real será establecida
-             * por App mediante left/top.
+             * La posición será controlada por App.
              *
-             * Estas variables solamente sirven
-             * como posición inicial.
+             * No usar right/bottom al mismo tiempo
+             * que left/top cuando App ya estableció
+             * una posición.
              */
+
             left: auto;
             top: auto;
 
@@ -67,6 +79,14 @@ export function injectStyles() {
             width: 52px;
             height: 52px;
 
+            min-width: 52px;
+            min-height: 52px;
+
+            padding: 0;
+            margin: 0;
+
+            box-sizing: border-box;
+
             border-radius: 50%;
 
             background:
@@ -75,6 +95,7 @@ export function injectStyles() {
             color: #fff;
 
             display: flex;
+
             align-items: center;
             justify-content: center;
 
@@ -88,10 +109,40 @@ export function injectStyles() {
                 var(--tw3b-shadow);
 
             z-index: 99998;
+
+            /*
+             * MUY IMPORTANTE PARA MÓVIL.
+             *
+             * Impide que el navegador interprete
+             * el gesto como scroll/pan mientras
+             * el usuario arrastra el FAB.
+             */
+
             touch-action: none;
+
+            /*
+             * Evita selección de texto durante
+             * el arrastre.
+             */
+
             -webkit-user-select: none;
             user-select: none;
+
             -webkit-touch-callout: none;
+
+            /*
+             * Evita comportamientos nativos
+             * de drag en algunos navegadores.
+             */
+
+            -webkit-user-drag: none;
+
+            /*
+             * El FAB no debe provocar scroll
+             * accidentalmente.
+             */
+
+            overscroll-behavior: contain;
 
             transition:
                 transform 0.15s ease,
@@ -99,27 +150,96 @@ export function injectStyles() {
         }
 
 
+        /*
+         * Cualquier elemento interno del FAB
+         * tampoco debe capturar gestos táctiles.
+         */
+
+        .tw3b-fab * {
+
+            pointer-events: none;
+
+            -webkit-user-select: none;
+            user-select: none;
+
+            -webkit-user-drag: none;
+        }
+
+
         .tw3b-fab:active {
+
             cursor: grabbing;
         }
 
 
         .tw3b-fab:hover {
-            transform: scale(1.06);
+
+            transform:
+                scale(1.06);
         }
 
 
         /*
-         * Cuando App está moviendo el botón,
-         * evitamos animaciones que puedan
-         * interferir con el movimiento.
+         * Durante el arrastre NO queremos:
+         *
+         * - scale
+         * - transición
+         * - animación
+         *
+         * porque producen sensación de
+         * movimiento torpe.
          */
+
         .tw3b-fab.tw3b-dragging {
-            cursor: grabbing;
-            transition: none;
-            transform: none;
+
+            cursor:
+                grabbing;
+
+            transition:
+                none !important;
+
+            transform:
+                none !important;
+
+            box-shadow:
+                var(--tw3b-shadow);
+
+            /*
+             * Refuerza el comportamiento táctil.
+             */
+
+            touch-action:
+                none !important;
         }
 
+
+        /*
+         * Cuando se está arrastrando,
+         * el navegador no debe intentar
+         * seleccionar contenido.
+         */
+
+        body.tw3b-dragging {
+
+            -webkit-user-select:
+                none !important;
+
+            user-select:
+                none !important;
+
+            /*
+             * Evita scroll accidental durante
+             * el gesto de arrastre.
+             */
+
+            overscroll-behavior:
+                none;
+        }
+
+
+        /*
+         * Badge de alertas.
+         */
 
         .tw3b-fab.has-alerts::after {
 
@@ -140,6 +260,9 @@ export function injectStyles() {
 
             border:
                 2px solid var(--tw3b-bg);
+
+            pointer-events:
+                none;
         }
 
 
@@ -151,11 +274,6 @@ export function injectStyles() {
 
             position: fixed;
 
-            /*
-             * App establece left/top dinámicamente
-             * para que el panel permanezca junto
-             * al botón flotante.
-             */
             left: auto;
             top: auto;
 
@@ -212,6 +330,14 @@ export function injectStyles() {
 
             pointer-events:
                 none;
+
+            /*
+             * El panel sí debe permitir
+             * interacción táctil normal.
+             */
+
+            touch-action:
+                auto;
         }
 
 
@@ -228,28 +354,31 @@ export function injectStyles() {
         }
 
 
-        /*
-         * Evita que el panel se salga de la
-         * pantalla cuando el FAB está cerca
-         * de un borde.
-         */
         .tw3b-panel.tw3b-panel-left {
-            transform-origin: right center;
+
+            transform-origin:
+                right center;
         }
 
 
         .tw3b-panel.tw3b-panel-right {
-            transform-origin: left center;
+
+            transform-origin:
+                left center;
         }
 
 
         .tw3b-panel.tw3b-panel-top {
-            transform-origin: center bottom;
+
+            transform-origin:
+                center bottom;
         }
 
 
         .tw3b-panel.tw3b-panel-bottom {
-            transform-origin: center top;
+
+            transform-origin:
+                center top;
         }
 
 
@@ -296,6 +425,17 @@ export function injectStyles() {
 
             flex:
                 1;
+
+            /*
+             * Permitir scroll vertical normal
+             * dentro del panel.
+             */
+
+            touch-action:
+                pan-y;
+
+            -webkit-overflow-scrolling:
+                touch;
         }
 
 
@@ -345,7 +485,7 @@ export function injectStyles() {
 
 
         /* =====================================================
-         * SEARCH SUGGESTIONS
+         * SEARCH WRAPPER
          * ===================================================== */
 
         .tw3b-search-wrapper {
@@ -389,6 +529,12 @@ export function injectStyles() {
 
             z-index:
                 100000;
+
+            touch-action:
+                pan-y;
+
+            -webkit-overflow-scrolling:
+                touch;
         }
 
 
@@ -414,6 +560,9 @@ export function injectStyles() {
 
             font-size:
                 12px;
+
+            touch-action:
+                manipulation;
         }
 
 
@@ -514,6 +663,9 @@ export function injectStyles() {
 
             justify-content:
                 center;
+
+            touch-action:
+                manipulation;
         }
 
 
@@ -622,6 +774,9 @@ export function injectStyles() {
             transition:
                 background 0.12s ease,
                 border-color 0.12s ease;
+
+            touch-action:
+                manipulation;
         }
 
 
@@ -724,6 +879,9 @@ export function injectStyles() {
             transition:
                 border-color 0.12s ease,
                 background 0.12s ease;
+
+            touch-action:
+                manipulation;
         }
 
 
@@ -844,6 +1002,9 @@ export function injectStyles() {
 
             transition:
                 opacity 0.12s ease;
+
+            touch-action:
+                manipulation;
         }
 
 
@@ -927,11 +1088,13 @@ export function injectStyles() {
         @keyframes tw3b-shimmer {
 
             0% {
+
                 background-position:
                     100% 50%;
             }
 
             100% {
+
                 background-position:
                     0 50%;
             }
@@ -967,6 +1130,9 @@ export function injectStyles() {
 
             padding:
                 2px 0;
+
+            touch-action:
+                manipulation;
         }
 
 
@@ -997,10 +1163,55 @@ export function injectStyles() {
             .tw3b-panel {
 
                 width:
-                    min(340px, calc(100vw - 20px));
+                    min(
+                        340px,
+                        calc(100vw - 20px)
+                    );
 
                 max-height:
                     75vh;
+            }
+
+
+            .tw3b-fab {
+
+                width:
+                    52px;
+
+                height:
+                    52px;
+
+                min-width:
+                    52px;
+
+                min-height:
+                    52px;
+            }
+        }
+
+
+        /*
+         * =====================================================
+         * REDUCIR MOVIMIENTO
+         * =====================================================
+         */
+
+        @media (prefers-reduced-motion: reduce) {
+
+            .tw3b-fab,
+            .tw3b-panel,
+            .tw3b-menu-item,
+            .tw3b-card,
+            .tw3b-button {
+
+                transition:
+                    none !important;
+            }
+
+            .tw3b-skeleton {
+
+                animation:
+                    none !important;
             }
         }
 
@@ -1012,6 +1223,12 @@ export function injectStyles() {
     );
 }
 
+
+/*
+ * =========================================================
+ * STATUS BADGE
+ * =========================================================
+ */
 
 export function statusBadgeClass(status) {
 
@@ -1032,13 +1249,21 @@ export function statusBadgeClass(status) {
 }
 
 
+/*
+ * =========================================================
+ * FORMAT MONEY
+ * =========================================================
+ */
+
 export function formatMoney(value) {
 
     if (
         !Number.isFinite(value)
     ) {
+
         return "-";
     }
+
 
     return "$" +
         Math.round(value)
@@ -1046,13 +1271,21 @@ export function formatMoney(value) {
 }
 
 
+/*
+ * =========================================================
+ * FORMAT PERCENT
+ * =========================================================
+ */
+
 export function formatPercent(value) {
 
     if (
         !Number.isFinite(value)
     ) {
+
         return "-";
     }
+
 
     return (
         value * 100

@@ -11,16 +11,38 @@ const VIEWS = {
     AUDIT: "audit",
     HISTORY: "history",
     SETTINGS: "settings"
-
 };
+
+
+/*
+ * =========================================================
+ * IDENTIFICADORES GLOBALES
+ * =========================================================
+ *
+ * Estos IDs permiten garantizar que solamente exista
+ * una instancia visual de TornW3B en el documento.
+ */
+
+const FAB_ID =
+    "tornw3b-fab";
+
+const PANEL_ID =
+    "tornw3b-panel";
+
+const APP_INSTANCE_KEY =
+    "__TornW3B_App_Instance__";
 
 
 export class App {
 
     constructor(ctx, views = {}) {
 
-        this.ctx = ctx;
-        this.views = views;
+        this.ctx =
+            ctx;
+
+        this.views =
+            views;
+
 
         this.currentView =
             VIEWS.MENU;
@@ -28,12 +50,35 @@ export class App {
         this.activeViewInstance =
             null;
 
-        this.fab = null;
-        this.panel = null;
-        this.panelBody = null;
 
-        this.searchInput = null;
-        this.iconBar = null;
+        this.fab =
+            null;
+
+        this.panel =
+            null;
+
+        this.panelBody =
+            null;
+
+
+        this.searchInput =
+            null;
+
+        this.iconBar =
+            null;
+
+
+        /*
+         * =====================================================
+         * ESTADO
+         * =====================================================
+         */
+
+        this.mounted =
+            false;
+
+        this.destroyed =
+            false;
 
 
         /*
@@ -57,9 +102,30 @@ export class App {
         this.fabWasDragged =
             false;
 
-        this.fabPointerMoved =
-            false;
 
+        /*
+         * =====================================================
+         * LISTENERS
+         * =====================================================
+         */
+
+        this.boundResize =
+            null;
+
+        this.boundFabPointerDown =
+            null;
+
+        this.boundFabPointerMove =
+            null;
+
+        this.boundFabPointerUp =
+            null;
+
+        this.boundFabPointerCancel =
+            null;
+
+        this.boundFabClick =
+            null;
     }
 
 
@@ -71,6 +137,119 @@ export class App {
 
     mount() {
 
+        /*
+         * -----------------------------------------------------
+         * Protección contra múltiples mount() de la misma
+         * instancia.
+         * -----------------------------------------------------
+         */
+
+        if (this.mounted) {
+
+            console.warn(
+                "[TornW3B] App.mount() ignorado: " +
+                "la aplicación ya está montada."
+            );
+
+            return;
+        }
+
+
+        /*
+         * -----------------------------------------------------
+         * Protección GLOBAL.
+         *
+         * Si otra instancia de App existe, la destruimos
+         * antes de crear una nueva.
+         * -----------------------------------------------------
+         */
+
+        const previousApp =
+            window[APP_INSTANCE_KEY];
+
+
+        if (
+            previousApp &&
+            previousApp !== this &&
+            typeof previousApp.destroy === "function"
+        ) {
+
+            console.warn(
+                "[TornW3B] Se detectó una instancia anterior. " +
+                "Destruyéndola antes de montar la nueva."
+            );
+
+
+            try {
+
+                previousApp.destroy();
+
+            } catch (error) {
+
+                console.warn(
+                    "[TornW3B] Error destruyendo instancia anterior:",
+                    error
+                );
+            }
+        }
+
+
+        /*
+         * -----------------------------------------------------
+         * Limpieza defensiva del DOM.
+         *
+         * Incluso si una instancia anterior quedó incompleta,
+         * nunca permitimos múltiples FAB/panel.
+         * -----------------------------------------------------
+         */
+
+        document
+            .querySelectorAll(
+                `#${FAB_ID}`
+            )
+            .forEach(
+                element => {
+
+                    element.remove();
+
+                }
+            );
+
+
+        document
+            .querySelectorAll(
+                `#${PANEL_ID}`
+            )
+            .forEach(
+                element => {
+
+                    element.remove();
+
+                }
+            );
+
+
+        /*
+         * Registrar esta instancia como la única activa.
+         */
+
+        window[APP_INSTANCE_KEY] =
+            this;
+
+
+        this.mounted =
+            true;
+
+        this.destroyed =
+            false;
+
+
+        /*
+         * =====================================================
+         * ESTILOS
+         * =====================================================
+         */
+
         injectStyles();
 
 
@@ -81,21 +260,49 @@ export class App {
          */
 
         this.fab =
-            document.createElement("button");
+            document.createElement(
+                "button"
+            );
+
+
+        this.fab.id =
+            FAB_ID;
+
 
         this.fab.className =
             "tw3b-fab";
 
+
         this.fab.type =
             "button";
 
+
         this.fab.innerHTML =
             "💰";
+
 
         this.fab.setAttribute(
             "aria-label",
             "Abrir TornW3B Trader"
         );
+
+
+        this.fab.style.touchAction =
+            "none";
+
+
+        /*
+         * Posición guardada.
+         */
+
+        this.loadFabPosition();
+
+
+        /*
+         * Arrastre.
+         */
+
+        this.enableFabDragging();
 
 
         /*
@@ -105,14 +312,24 @@ export class App {
          */
 
         this.panel =
-            document.createElement("div");
+            document.createElement(
+                "div"
+            );
+
+
+        this.panel.id =
+            PANEL_ID;
+
 
         this.panel.className =
             "tw3b-panel";
 
 
         this.panelBody =
-            document.createElement("div");
+            document.createElement(
+                "div"
+            );
+
 
         this.panelBody.className =
             "tw3b-panel-body";
@@ -124,35 +341,19 @@ export class App {
 
 
         /*
-         * IMPORTANTE:
-         *
-         * Primero insertamos los elementos
-         * en el DOM y después recuperamos
-         * la posición guardada.
+         * =====================================================
+         * DOM
+         * =====================================================
          */
 
         document.body.appendChild(
             this.fab
         );
 
+
         document.body.appendChild(
             this.panel
         );
-
-
-        /*
-         * Ahora sí podemos recuperar
-         * correctamente la posición.
-         */
-
-        this.loadFabPosition();
-
-
-        /*
-         * Activar arrastre.
-         */
-
-        this.enableFabDragging();
 
 
         /*
@@ -161,23 +362,35 @@ export class App {
          * =====================================================
          */
 
-        window.addEventListener(
-            "resize",
+        this.boundResize =
             () => {
+
+                if (
+                    this.destroyed
+                ) {
+
+                    return;
+                }
+
 
                 this.keepFabInsideViewport();
 
+
                 if (
+                    this.panel &&
                     this.panel.classList.contains(
                         "open"
                     )
                 ) {
 
                     this.updatePanelPosition();
-
                 }
+            };
 
-            }
+
+        window.addEventListener(
+            "resize",
+            this.boundResize
         );
 
 
@@ -189,14 +402,266 @@ export class App {
 
         this.renderMenu();
 
-        this.refreshAlertBadge();
 
+        this.refreshAlertBadge();
     }
 
 
     /*
      * =========================================================
-     * POSICIÓN DEL FAB
+     * DESTROY
+     * =========================================================
+     */
+
+    destroy() {
+
+        if (
+            this.destroyed
+        ) {
+
+            return;
+        }
+
+
+        this.destroyed =
+            true;
+
+        this.mounted =
+            false;
+
+
+        /*
+         * Detener vista activa.
+         */
+
+        if (
+            this.activeViewInstance &&
+            typeof this.activeViewInstance.destroy ===
+            "function"
+        ) {
+
+            try {
+
+                this.activeViewInstance.destroy();
+
+            } catch (error) {
+
+                console.warn(
+                    "[TornW3B] Error destruyendo vista:",
+                    error
+                );
+            }
+        }
+
+
+        this.activeViewInstance =
+            null;
+
+
+        /*
+         * Eliminar resize listener.
+         */
+
+        if (
+            this.boundResize
+        ) {
+
+            window.removeEventListener(
+                "resize",
+                this.boundResize
+            );
+
+            this.boundResize =
+                null;
+        }
+
+
+        /*
+         * Eliminar listeners del FAB.
+         */
+
+        this.removeFabListeners();
+
+
+        /*
+         * Eliminar FAB.
+         */
+
+        if (
+            this.fab &&
+            this.fab.parentNode
+        ) {
+
+            this.fab.parentNode.removeChild(
+                this.fab
+            );
+        }
+
+
+        /*
+         * Eliminar panel.
+         */
+
+        if (
+            this.panel &&
+            this.panel.parentNode
+        ) {
+
+            this.panel.parentNode.removeChild(
+                this.panel
+            );
+        }
+
+
+        this.fab =
+            null;
+
+        this.panel =
+            null;
+
+        this.panelBody =
+            null;
+
+        this.searchInput =
+            null;
+
+        this.iconBar =
+            null;
+
+
+        /*
+         * Limpieza defensiva.
+         */
+
+        document
+            .querySelectorAll(
+                `#${FAB_ID}`
+            )
+            .forEach(
+                element => {
+
+                    element.remove();
+
+                }
+            );
+
+
+        document
+            .querySelectorAll(
+                `#${PANEL_ID}`
+            )
+            .forEach(
+                element => {
+
+                    element.remove();
+
+                }
+            );
+
+
+        /*
+         * Solo eliminar la referencia global
+         * si esta instancia sigue siendo la activa.
+         */
+
+        if (
+            window[APP_INSTANCE_KEY] ===
+            this
+        ) {
+
+            window[APP_INSTANCE_KEY] =
+                null;
+        }
+    }
+
+
+    /*
+     * =========================================================
+     * REMOVE FAB LISTENERS
+     * =========================================================
+     */
+
+    removeFabListeners() {
+
+        if (!this.fab) {
+            return;
+        }
+
+
+        if (
+            this.boundFabPointerDown
+        ) {
+
+            this.fab.removeEventListener(
+                "pointerdown",
+                this.boundFabPointerDown
+            );
+
+            this.boundFabPointerDown =
+                null;
+        }
+
+
+        if (
+            this.boundFabPointerMove
+        ) {
+
+            this.fab.removeEventListener(
+                "pointermove",
+                this.boundFabPointerMove
+            );
+
+            this.boundFabPointerMove =
+                null;
+        }
+
+
+        if (
+            this.boundFabPointerUp
+        ) {
+
+            this.fab.removeEventListener(
+                "pointerup",
+                this.boundFabPointerUp
+            );
+
+            this.boundFabPointerUp =
+                null;
+        }
+
+
+        if (
+            this.boundFabPointerCancel
+        ) {
+
+            this.fab.removeEventListener(
+                "pointercancel",
+                this.boundFabPointerCancel
+            );
+
+            this.boundFabPointerCancel =
+                null;
+        }
+
+
+        if (
+            this.boundFabClick
+        ) {
+
+            this.fab.removeEventListener(
+                "click",
+                this.boundFabClick
+            );
+
+            this.boundFabClick =
+                null;
+        }
+    }
+
+
+    /*
+     * =========================================================
+     * FAB POSITION
      * =========================================================
      */
 
@@ -215,12 +680,6 @@ export class App {
                 );
 
 
-            /*
-             * Si no existe una posición guardada,
-             * dejamos que CSS utilice su posición
-             * inicial.
-             */
-
             if (!raw) {
                 return;
             }
@@ -230,47 +689,34 @@ export class App {
                 JSON.parse(raw);
 
 
-            const left =
-                Number(position?.left);
-
-            const top =
-                Number(position?.top);
-
-
             if (
-                !Number.isFinite(left) ||
-                !Number.isFinite(top)
+                !position ||
+                !Number.isFinite(
+                    Number(position.left)
+                ) ||
+                !Number.isFinite(
+                    Number(position.top)
+                )
             ) {
 
                 return;
-
             }
 
 
-            /*
-             * Aplicar posición absoluta
-             * respecto al viewport.
-             */
-
             this.fab.style.left =
-                `${left}px`;
+                `${Number(position.left)}px`;
+
 
             this.fab.style.top =
-                `${top}px`;
+                `${Number(position.top)}px`;
+
 
             this.fab.style.right =
                 "auto";
 
+
             this.fab.style.bottom =
                 "auto";
-
-
-            /*
-             * Comprobar que siga dentro
-             * de la pantalla.
-             */
-
-            this.keepFabInsideViewport();
 
 
         } catch (error) {
@@ -279,9 +725,7 @@ export class App {
                 "[TornW3B] No se pudo recuperar la posición del botón:",
                 error
             );
-
         }
-
     }
 
 
@@ -311,7 +755,6 @@ export class App {
                         Math.round(
                             rect.top
                         )
-
                 })
             );
 
@@ -322,9 +765,7 @@ export class App {
                 "[TornW3B] No se pudo guardar la posición del botón:",
                 error
             );
-
         }
-
     }
 
 
@@ -339,49 +780,30 @@ export class App {
             this.fab.getBoundingClientRect();
 
 
+        const hasExplicitPosition =
+            this.fab.style.left ||
+            this.fab.style.top;
+
+
+        if (!hasExplicitPosition) {
+            return;
+        }
+
+
         const width =
             this.fab.offsetWidth;
+
 
         const height =
             this.fab.offsetHeight;
 
 
-        /*
-         * Solo hacemos esto si el FAB
-         * tiene una posición manual.
-         */
-
-        const hasManualPosition =
-            this.fab.style.left !== "" &&
-            this.fab.style.top !== "";
-
-
-        if (!hasManualPosition) {
-            return;
-        }
-
-
         let left =
             rect.left;
 
+
         let top =
             rect.top;
-
-
-        const maxLeft =
-            Math.max(
-                0,
-                window.innerWidth -
-                width
-            );
-
-
-        const maxTop =
-            Math.max(
-                0,
-                window.innerHeight -
-                height
-            );
 
 
         left =
@@ -389,7 +811,8 @@ export class App {
                 0,
                 Math.min(
                     left,
-                    maxLeft
+                    window.innerWidth -
+                    width
                 )
             );
 
@@ -399,321 +822,248 @@ export class App {
                 0,
                 Math.min(
                     top,
-                    maxTop
+                    window.innerHeight -
+                    height
                 )
             );
 
 
         this.fab.style.left =
-            `${Math.round(left)}px`;
+            `${left}px`;
+
 
         this.fab.style.top =
-            `${Math.round(top)}px`;
+            `${top}px`;
+
 
         this.fab.style.right =
             "auto";
+
 
         this.fab.style.bottom =
             "auto";
 
 
         this.saveFabPosition();
-
     }
 
 
     /*
      * =========================================================
-     * ARRASTRE DEL FAB
+     * FAB DRAGGING
      * =========================================================
      */
 
     enableFabDragging() {
 
-    let pointerMoved = false;
-
-    let startX = 0;
-    let startY = 0;
-
-    const DRAG_THRESHOLD = 6;
-
-
-    this.fab.addEventListener(
-        "pointerdown",
-        event => {
-
-            /*
-             * Mouse:
-             * solamente botón izquierdo.
-             */
-
-            if (
-                event.pointerType === "mouse" &&
-                event.button !== 0
-            ) {
-
-                return;
-            }
-
-
-            /*
-             * Evitar que el navegador
-             * convierta el gesto táctil
-             * en scroll.
-             */
-
-            event.preventDefault();
-
-
-            this.isDraggingFab =
-                true;
-
-            pointerMoved =
-                false;
-
-            this.fabWasDragged =
-                false;
-
-
-            startX =
-                event.clientX;
-
-            startY =
-                event.clientY;
-
-
-            const rect =
-                this.fab.getBoundingClientRect();
-
-
-            this.fabDragOffsetX =
-                event.clientX -
-                rect.left;
-
-
-            this.fabDragOffsetY =
-                event.clientY -
-                rect.top;
-
-
-            /*
-             * Convertir la posición actual
-             * a left/top.
-             */
-
-            this.fab.style.left =
-                `${rect.left}px`;
-
-            this.fab.style.top =
-                `${rect.top}px`;
-
-            this.fab.style.right =
-                "auto";
-
-            this.fab.style.bottom =
-                "auto";
-
-
-            /*
-             * Capturar el pointer.
-             */
-
-            try {
-
-                this.fab.setPointerCapture(
-                    event.pointerId
-                );
-
-            } catch {
-                // Algunos navegadores móviles
-                // pueden no soportarlo.
-            }
-        },
-        {
-            passive: false
+        if (!this.fab) {
+            return;
         }
-    );
 
 
-    this.fab.addEventListener(
-        "pointermove",
-        event => {
-
-            if (
-                !this.isDraggingFab
-            ) {
-
-                return;
-            }
+        let pointerMoved =
+            false;
 
 
-            event.preventDefault();
+        let pointerDownX =
+            0;
 
 
-            /*
-             * Determinar si realmente
-             * comenzó un arrastre.
-             */
-
-            const deltaX =
-                event.clientX -
-                startX;
-
-            const deltaY =
-                event.clientY -
-                startY;
+        let pointerDownY =
+            0;
 
 
-            const distance =
-                Math.sqrt(
-                    deltaX * deltaX +
-                    deltaY * deltaY
-                );
+        const DRAG_THRESHOLD =
+            6;
 
 
-            if (
-                distance >=
-                DRAG_THRESHOLD
-            ) {
+        /*
+         * POINTER DOWN
+         */
+
+        this.boundFabPointerDown =
+            event => {
+
+                if (
+                    this.destroyed
+                ) {
+
+                    return;
+                }
+
+
+                if (
+                    event.pointerType === "mouse" &&
+                    event.button !== 0
+                ) {
+
+                    return;
+                }
+
+
+                this.isDraggingFab =
+                    true;
+
+
+                pointerMoved =
+                    false;
+
+
+                this.fabWasDragged =
+                    false;
+
+
+                pointerDownX =
+                    event.clientX;
+
+
+                pointerDownY =
+                    event.clientY;
+
+
+                const rect =
+                    this.fab.getBoundingClientRect();
+
+
+                this.fabDragOffsetX =
+                    event.clientX -
+                    rect.left;
+
+
+                this.fabDragOffsetY =
+                    event.clientY -
+                    rect.top;
+
+
+                this.fab.style.left =
+                    `${rect.left}px`;
+
+
+                this.fab.style.top =
+                    `${rect.top}px`;
+
+
+                this.fab.style.right =
+                    "auto";
+
+
+                this.fab.style.bottom =
+                    "auto";
+
+
+                try {
+
+                    this.fab.setPointerCapture(
+                        event.pointerId
+                    );
+
+                } catch {
+                    // Ignorar.
+                }
+            };
+
+
+        /*
+         * POINTER MOVE
+         */
+
+        this.boundFabPointerMove =
+            event => {
+
+                if (
+                    !this.isDraggingFab
+                ) {
+
+                    return;
+                }
+
+
+                const deltaX =
+                    Math.abs(
+                        event.clientX -
+                        pointerDownX
+                    );
+
+
+                const deltaY =
+                    Math.abs(
+                        event.clientY -
+                        pointerDownY
+                    );
+
+
+                if (
+                    !pointerMoved &&
+                    deltaX < DRAG_THRESHOLD &&
+                    deltaY < DRAG_THRESHOLD
+                ) {
+
+                    return;
+                }
+
 
                 pointerMoved =
                     true;
 
+
                 this.fabWasDragged =
                     true;
-            }
 
 
-            /*
-             * Si todavía no superó el
-             * umbral, no mover nada.
-             */
-
-            if (
-                !pointerMoved
-            ) {
-
-                return;
-            }
+                const width =
+                    this.fab.offsetWidth;
 
 
-            const width =
-                this.fab.offsetWidth;
-
-            const height =
-                this.fab.offsetHeight;
+                const height =
+                    this.fab.offsetHeight;
 
 
-            let left =
-                event.clientX -
-                this.fabDragOffsetX;
+                let left =
+                    event.clientX -
+                    this.fabDragOffsetX;
 
 
-            let top =
-                event.clientY -
-                this.fabDragOffsetY;
+                let top =
+                    event.clientY -
+                    this.fabDragOffsetY;
 
 
-            /*
-             * Mantener el botón dentro
-             * del viewport.
-             */
-
-            left =
-                Math.max(
-                    0,
-                    Math.min(
-                        left,
-                        window.innerWidth -
-                        width
-                    )
-                );
+                left =
+                    Math.max(
+                        0,
+                        Math.min(
+                            left,
+                            window.innerWidth -
+                            width
+                        )
+                    );
 
 
-            top =
-                Math.max(
-                    0,
-                    Math.min(
-                        top,
-                        window.innerHeight -
-                        height
-                    )
-                );
+                top =
+                    Math.max(
+                        0,
+                        Math.min(
+                            top,
+                            window.innerHeight -
+                            height
+                        )
+                    );
 
 
-            this.fab.style.left =
-                `${left}px`;
-
-            this.fab.style.top =
-                `${top}px`;
-
-            this.fab.style.right =
-                "auto";
-
-            this.fab.style.bottom =
-                "auto";
+                this.fab.style.left =
+                    `${left}px`;
 
 
-            /*
-             * El panel acompaña al FAB.
-             */
-
-            if (
-                this.panel &&
-                this.panel.classList.contains(
-                    "open"
-                )
-            ) {
-
-                this.updatePanelPosition();
-            }
-        },
-        {
-            passive: false
-        }
-    );
+                this.fab.style.top =
+                    `${top}px`;
 
 
-    this.fab.addEventListener(
-        "pointerup",
-        event => {
-
-            if (
-                !this.isDraggingFab
-            ) {
-
-                return;
-            }
+                this.fab.style.right =
+                    "auto";
 
 
-            event.preventDefault();
-
-
-            this.isDraggingFab =
-                false;
-
-
-            try {
-
-                this.fab.releasePointerCapture(
-                    event.pointerId
-                );
-
-            } catch {
-                // Ignorar.
-            }
-
-
-            /*
-             * Solo guardar si realmente
-             * hubo movimiento.
-             */
-
-            if (
-                pointerMoved
-            ) {
-
-                this.saveFabPosition();
+                this.fab.style.bottom =
+                    "auto";
 
 
                 if (
@@ -727,96 +1077,192 @@ export class App {
                 }
 
 
-                /*
-                 * Evitar que el click generado
-                 * después del pointerup abra
-                 * accidentalmente el panel.
-                 */
+                if (
+                    event.cancelable
+                ) {
 
-                setTimeout(
-                    () => {
-
-                        this.fabWasDragged =
-                            false;
-
-                    },
-                    150
-                );
-            }
-        },
-        {
-            passive: false
-        }
-    );
+                    event.preventDefault();
+                }
+            };
 
 
-    this.fab.addEventListener(
-        "pointercancel",
-        event => {
+        /*
+         * POINTER UP
+         */
 
-            if (
-                !this.isDraggingFab
-            ) {
+        this.boundFabPointerUp =
+            event => {
 
-                return;
-            }
+                if (
+                    !this.isDraggingFab
+                ) {
 
-
-            event.preventDefault();
-
-
-            this.isDraggingFab =
-                false;
+                    return;
+                }
 
 
-            if (
-                pointerMoved
-            ) {
+                this.isDraggingFab =
+                    false;
+
+
+                try {
+
+                    if (
+                        this.fab.hasPointerCapture(
+                            event.pointerId
+                        )
+                    ) {
+
+                        this.fab.releasePointerCapture(
+                            event.pointerId
+                        );
+                    }
+
+                } catch {
+                    // Ignorar.
+                }
+
+
+                if (pointerMoved) {
+
+                    this.saveFabPosition();
+
+
+                    if (
+                        this.panel &&
+                        this.panel.classList.contains(
+                            "open"
+                        )
+                    ) {
+
+                        this.updatePanelPosition();
+                    }
+
+
+                    setTimeout(
+                        () => {
+
+                            if (!this.destroyed) {
+
+                                this.fabWasDragged =
+                                    false;
+                            }
+
+                        },
+                        100
+                    );
+                }
+            };
+
+
+        /*
+         * POINTER CANCEL
+         */
+
+        this.boundFabPointerCancel =
+            event => {
+
+                if (
+                    !this.isDraggingFab
+                ) {
+
+                    return;
+                }
+
+
+                this.isDraggingFab =
+                    false;
+
 
                 this.saveFabPosition();
+
+
+                this.fabWasDragged =
+                    false;
+
+
+                try {
+
+                    if (
+                        this.fab.hasPointerCapture(
+                            event.pointerId
+                        )
+                    ) {
+
+                        this.fab.releasePointerCapture(
+                            event.pointerId
+                        );
+                    }
+
+                } catch {
+                    // Ignorar.
+                }
+            };
+
+
+        /*
+         * CLICK
+         */
+
+        this.boundFabClick =
+            event => {
+
+                if (
+                    this.fabWasDragged
+                ) {
+
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    return;
+                }
+
+
+                this.toggle();
+            };
+
+
+        /*
+         * Registrar listeners.
+         */
+
+        this.fab.addEventListener(
+            "pointerdown",
+            this.boundFabPointerDown
+        );
+
+
+        this.fab.addEventListener(
+            "pointermove",
+            this.boundFabPointerMove,
+            {
+                passive: false
             }
+        );
 
 
-            pointerMoved =
-                false;
-
-            this.fabWasDragged =
-                false;
-        },
-        {
-            passive: false
-        }
-    );
+        this.fab.addEventListener(
+            "pointerup",
+            this.boundFabPointerUp
+        );
 
 
-    /*
-     * Click separado del arrastre.
-     */
-
-    this.fab.addEventListener(
-        "click",
-        event => {
-
-            if (
-                this.fabWasDragged
-            ) {
-
-                event.preventDefault();
-                event.stopPropagation();
-
-                return;
-            }
+        this.fab.addEventListener(
+            "pointercancel",
+            this.boundFabPointerCancel
+        );
 
 
-            this.toggle();
-        }
-    );
-}
+        this.fab.addEventListener(
+            "click",
+            this.boundFabClick
+        );
+    }
 
 
     /*
      * =========================================================
-     * POSICIÓN DEL PANEL
+     * PANEL POSITION
      * =========================================================
      */
 
@@ -828,7 +1274,6 @@ export class App {
         ) {
 
             return;
-
         }
 
 
@@ -836,14 +1281,10 @@ export class App {
             this.fab.getBoundingClientRect();
 
 
-        /*
-         * El panel debe estar abierto para
-         * obtener sus dimensiones reales.
-         */
-
         const panelWidth =
             this.panel.offsetWidth ||
-            340;
+            320;
+
 
         const panelHeight =
             this.panel.offsetHeight ||
@@ -853,117 +1294,72 @@ export class App {
         const gap =
             10;
 
-        const margin =
-            8;
-
-
-        /*
-         * =====================================================
-         * HORIZONTAL
-         * =====================================================
-         */
 
         let left =
             fabRect.left;
 
 
-        /*
-         * Si el panel se sale por la derecha,
-         * desplazamos su posición hacia la izquierda.
-         */
-
-        left =
-            Math.min(
-                left,
-                window.innerWidth -
-                panelWidth -
-                margin
-            );
-
-
-        left =
-            Math.max(
-                margin,
-                left
-            );
-
-
-        /*
-         * =====================================================
-         * VERTICAL
-         * =====================================================
-         *
-         * Intentamos primero colocarlo debajo.
-         * Si no entra, lo colocamos arriba.
-         */
-
         let top;
 
 
-        const spaceBelow =
-            window.innerHeight -
-            fabRect.bottom -
-            gap -
-            margin;
-
-
-        const spaceAbove =
-            fabRect.top -
-            gap -
-            margin;
-
-
         if (
-            spaceBelow >= panelHeight
+            fabRect.bottom +
+            gap +
+            panelHeight <=
+            window.innerHeight
         ) {
 
             top =
                 fabRect.bottom +
                 gap;
 
-        } else if (
-            spaceAbove >= panelHeight
-        ) {
+        } else {
 
             top =
                 fabRect.top -
                 panelHeight -
                 gap;
-
-        } else {
-
-            /*
-             * Si no entra ni arriba ni abajo,
-             * lo mantenemos dentro del viewport.
-             */
-
-            top =
-                Math.max(
-                    margin,
-                    Math.min(
-                        fabRect.bottom +
-                        gap,
-                        window.innerHeight -
-                        panelHeight -
-                        margin
-                    )
-                );
-
         }
 
 
+        left =
+            Math.max(
+                8,
+                Math.min(
+                    left,
+                    window.innerWidth -
+                    panelWidth -
+                    8
+                )
+            );
+
+
+        top =
+            Math.max(
+                8,
+                Math.min(
+                    top,
+                    window.innerHeight -
+                    panelHeight -
+                    8
+                )
+            );
+
+
         this.panel.style.left =
-            `${Math.round(left)}px`;
+            `${left}px`;
+
 
         this.panel.style.top =
-            `${Math.round(top)}px`;
+            `${top}px`;
+
 
         this.panel.style.right =
             "auto";
 
+
         this.panel.style.bottom =
             "auto";
-
     }
 
 
@@ -974,6 +1370,11 @@ export class App {
      */
 
     toggle() {
+
+        if (!this.panel) {
+            return;
+        }
+
 
         if (
             this.panel.classList.contains(
@@ -986,13 +1387,20 @@ export class App {
         } else {
 
             this.open();
-
         }
-
     }
 
 
     open() {
+
+        if (
+            this.destroyed ||
+            !this.panel
+        ) {
+
+            return;
+        }
+
 
         this.panel.classList.add(
             "open"
@@ -1002,8 +1410,15 @@ export class App {
         requestAnimationFrame(
             () => {
 
-                this.updatePanelPosition();
+                if (
+                    this.destroyed
+                ) {
 
+                    return;
+                }
+
+
+                this.updatePanelPosition();
             }
         );
 
@@ -1013,25 +1428,34 @@ export class App {
             setTimeout(
                 () => {
 
-                    this.searchInput.focus();
+                    if (
+                        !this.destroyed &&
+                        this.searchInput
+                    ) {
+
+                        this.searchInput.focus();
+                    }
 
                 },
                 100
             );
-
         }
-
     }
 
 
     close() {
 
+        if (!this.panel) {
+            return;
+        }
+
+
         this.panel.classList.remove(
             "open"
         );
 
-        this.hideSuggestions();
 
+        this.hideSuggestions();
     }
 
 
@@ -1043,18 +1467,32 @@ export class App {
 
     renderMenu() {
 
+        if (
+            this.destroyed ||
+            !this.panelBody
+        ) {
+
+            return;
+        }
+
+
         this.currentView =
             VIEWS.MENU;
 
+
         this.activeViewInstance =
             null;
+
 
         this.panelBody.innerHTML =
             "";
 
 
         const toolbar =
-            document.createElement("div");
+            document.createElement(
+                "div"
+            );
+
 
         toolbar.className =
             "tw3b-toolbar";
@@ -1065,23 +1503,32 @@ export class App {
          */
 
         const searchWrapper =
-            document.createElement("div");
+            document.createElement(
+                "div"
+            );
+
 
         searchWrapper.className =
             "tw3b-search-wrapper";
 
 
         this.searchInput =
-            document.createElement("input");
+            document.createElement(
+                "input"
+            );
+
 
         this.searchInput.className =
             "tw3b-search";
 
+
         this.searchInput.type =
             "text";
 
+
         this.searchInput.placeholder =
             "🔎 Buscar artículo...";
+
 
         this.searchInput.autocomplete =
             "off";
@@ -1094,7 +1541,6 @@ export class App {
                 this.handleSearch(
                     event.target.value
                 );
-
             }
         );
 
@@ -1109,7 +1555,10 @@ export class App {
          */
 
         this.iconBar =
-            document.createElement("div");
+            document.createElement(
+                "div"
+            );
+
 
         this.iconBar.className =
             "tw3b-icon-bar";
@@ -1124,7 +1573,6 @@ export class App {
             view: VIEWS.AUDIT,
 
             badge: true
-
         });
 
 
@@ -1135,7 +1583,6 @@ export class App {
             title: "Historial",
 
             view: VIEWS.HISTORY
-
         });
 
 
@@ -1146,13 +1593,13 @@ export class App {
             title: "Configuración",
 
             view: VIEWS.SETTINGS
-
         });
 
 
         toolbar.appendChild(
             searchWrapper
         );
+
 
         toolbar.appendChild(
             this.iconBar
@@ -1165,7 +1612,6 @@ export class App {
 
 
         this.refreshAlertBadge();
-
     }
 
 
@@ -1183,17 +1629,22 @@ export class App {
     }) {
 
         const button =
-            document.createElement("button");
+            document.createElement(
+                "button"
+            );
 
 
         button.type =
             "button";
 
+
         button.className =
             "tw3b-icon-button";
 
+
         button.title =
             title;
+
 
         button.setAttribute(
             "aria-label",
@@ -1202,10 +1653,14 @@ export class App {
 
 
         const iconElement =
-            document.createElement("span");
+            document.createElement(
+                "span"
+            );
+
 
         iconElement.className =
             "tw3b-icon";
+
 
         iconElement.textContent =
             icon;
@@ -1219,16 +1674,22 @@ export class App {
         if (badge) {
 
             const badgeElement =
-                document.createElement("span");
+                document.createElement(
+                    "span"
+                );
+
 
             badgeElement.className =
                 "tw3b-icon-badge";
 
+
             badgeElement.id =
                 "tw3b-alert-count";
 
+
             badgeElement.textContent =
                 "0";
+
 
             badgeElement.style.display =
                 "none";
@@ -1237,7 +1698,6 @@ export class App {
             button.appendChild(
                 badgeElement
             );
-
         }
 
 
@@ -1248,7 +1708,6 @@ export class App {
                 this.navigate(
                     view
                 );
-
             }
         );
 
@@ -1259,7 +1718,6 @@ export class App {
 
 
         return button;
-
     }
 
 
@@ -1270,6 +1728,14 @@ export class App {
      */
 
     handleSearch(query) {
+
+        if (
+            this.destroyed
+        ) {
+
+            return;
+        }
+
 
         const searchModule =
             this.views.search;
@@ -1282,7 +1748,6 @@ export class App {
         ) {
 
             return;
-
         }
 
 
@@ -1297,13 +1762,10 @@ export class App {
                 await this.selectSearchItem(
                     item
                 );
-
             },
 
             this.searchInput
-
         );
-
     }
 
 
@@ -1315,7 +1777,11 @@ export class App {
 
     async selectSearchItem(item) {
 
-        if (!item) {
+        if (
+            !item ||
+            this.destroyed
+        ) {
+
             return;
         }
 
@@ -1329,8 +1795,8 @@ export class App {
                 "[TornW3B] Scheduler todavía no está disponible."
             );
 
-            return;
 
+            return;
         }
 
 
@@ -1358,8 +1824,8 @@ export class App {
                     "Este artículo no puede ser auditado por Torn."
                 );
 
-                return;
 
+                return;
             }
 
 
@@ -1385,9 +1851,7 @@ export class App {
                 error?.message ||
                 "No se pudo auditar el artículo."
             );
-
         }
-
     }
 
 
@@ -1398,6 +1862,15 @@ export class App {
      */
 
     showLoading(itemName) {
+
+        if (
+            this.destroyed ||
+            !this.panelBody
+        ) {
+
+            return;
+        }
+
 
         this.panelBody.innerHTML = `
 
@@ -1416,7 +1889,6 @@ export class App {
             </div>
 
         `;
-
     }
 
 
@@ -1430,6 +1902,15 @@ export class App {
         itemName,
         message
     ) {
+
+        if (
+            this.destroyed ||
+            !this.panelBody
+        ) {
+
+            return;
+        }
+
 
         this.panelBody.innerHTML = `
 
@@ -1466,11 +1947,13 @@ export class App {
 
             back.addEventListener(
                 "click",
-                () => this.renderMenu()
+                () => {
+
+                    this.renderMenu();
+
+                }
             );
-
         }
-
     }
 
 
@@ -1486,13 +1969,20 @@ export class App {
     ) {
 
         if (
+            this.destroyed
+        ) {
+
+            return;
+        }
+
+
+        if (
             this.activeViewInstance &&
             typeof this.activeViewInstance.destroy ===
             "function"
         ) {
 
             this.activeViewInstance.destroy();
-
         }
 
 
@@ -1519,7 +2009,6 @@ export class App {
             this.renderMenu();
 
             return;
-
         }
 
 
@@ -1538,32 +2027,36 @@ export class App {
                 `Vista "${viewName}" no disponible.`
             );
 
-            return;
 
+            return;
         }
 
 
         /*
-         * =====================================================
-         * BOTÓN VOLVER
-         * =====================================================
+         * Botón volver.
          */
 
         const back =
-            document.createElement("button");
+            document.createElement(
+                "button"
+            );
 
 
         back.type =
             "button";
 
+
         back.className =
             "tw3b-back";
+
 
         back.innerHTML =
             "←";
 
+
         back.title =
             "Volver";
+
 
         back.setAttribute(
             "aria-label",
@@ -1578,7 +2071,6 @@ export class App {
                 this.navigate(
                     VIEWS.MENU
                 );
-
             }
         );
 
@@ -1589,13 +2081,14 @@ export class App {
 
 
         /*
-         * =====================================================
-         * CONTENEDOR DE VISTA
-         * =====================================================
+         * Contenedor.
          */
 
         const container =
-            document.createElement("div");
+            document.createElement(
+                "div"
+            );
+
 
         container.className =
             "tw3b-view-container";
@@ -1607,9 +2100,7 @@ export class App {
 
 
         /*
-         * =====================================================
-         * RENDERIZAR VISTA
-         * =====================================================
+         * Renderizar vista.
          */
 
         this.activeViewInstance =
@@ -1628,7 +2119,6 @@ export class App {
                         nextView,
                         nextParams
                     );
-
                 },
 
                 params
@@ -1637,11 +2127,11 @@ export class App {
 
 
         /*
-         * Recalcular posición porque
-         * la altura del panel puede haber cambiado.
+         * Recalcular posición.
          */
 
         if (
+            this.panel &&
             this.panel.classList.contains(
                 "open"
             )
@@ -1650,13 +2140,15 @@ export class App {
             requestAnimationFrame(
                 () => {
 
-                    this.updatePanelPosition();
+                    if (
+                        !this.destroyed
+                    ) {
 
+                        this.updatePanelPosition();
+                    }
                 }
             );
-
         }
-
     }
 
 
@@ -1678,9 +2170,7 @@ export class App {
 
             suggestions.style.display =
                 "none";
-
         }
-
     }
 
 
@@ -1692,7 +2182,11 @@ export class App {
 
     async refreshAlertBadge() {
 
-        if (!this.ctx.storage) {
+        if (
+            this.destroyed ||
+            !this.ctx.storage
+        ) {
+
             return;
         }
 
@@ -1705,21 +2199,27 @@ export class App {
 
 
             const alertCount =
-                Object.values(
-                    audits || {}
-                )
-                .filter(
-                    audit =>
-                        audit &&
-                        (
-                            audit.status ===
-                            "RED" ||
+                Object.values(audits)
+                    .filter(
+                        audit =>
+                            audit &&
+                            (
+                                audit.status ===
+                                "RED" ||
 
-                            audit.status ===
-                            "YELLOW"
-                        )
-                )
-                .length;
+                                audit.status ===
+                                "YELLOW"
+                            )
+                    )
+                    .length;
+
+
+            if (
+                !this.panelBody
+            ) {
+
+                return;
+            }
 
 
             const badge =
@@ -1733,11 +2233,11 @@ export class App {
                 badge.textContent =
                     String(alertCount);
 
+
                 badge.style.display =
                     alertCount > 0
                         ? "flex"
                         : "none";
-
             }
 
 
@@ -1747,7 +2247,6 @@ export class App {
                     "has-alerts",
                     alertCount > 0
                 );
-
             }
 
 
@@ -1757,11 +2256,8 @@ export class App {
                 "[TornW3B] No se pudo actualizar badge:",
                 error
             );
-
         }
-
     }
-
 }
 
 
@@ -1784,7 +2280,6 @@ function escapeHtml(str) {
 
 
     return div.innerHTML;
-
 }
 
 
