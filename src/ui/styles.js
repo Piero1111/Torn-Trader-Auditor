@@ -88,6 +88,10 @@ export function injectStyles() {
                 var(--tw3b-shadow);
 
             z-index: 99998;
+            touch-action: none;
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
 
             transition:
                 transform 0.15s ease,

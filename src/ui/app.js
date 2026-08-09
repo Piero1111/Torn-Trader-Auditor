@@ -430,192 +430,291 @@ export class App {
 
     enableFabDragging() {
 
-        if (!this.fab) {
-            return;
+    let pointerMoved = false;
+
+    let startX = 0;
+    let startY = 0;
+
+    const DRAG_THRESHOLD = 6;
+
+
+    this.fab.addEventListener(
+        "pointerdown",
+        event => {
+
+            /*
+             * Mouse:
+             * solamente botón izquierdo.
+             */
+
+            if (
+                event.pointerType === "mouse" &&
+                event.button !== 0
+            ) {
+
+                return;
+            }
+
+
+            /*
+             * Evitar que el navegador
+             * convierta el gesto táctil
+             * en scroll.
+             */
+
+            event.preventDefault();
+
+
+            this.isDraggingFab =
+                true;
+
+            pointerMoved =
+                false;
+
+            this.fabWasDragged =
+                false;
+
+
+            startX =
+                event.clientX;
+
+            startY =
+                event.clientY;
+
+
+            const rect =
+                this.fab.getBoundingClientRect();
+
+
+            this.fabDragOffsetX =
+                event.clientX -
+                rect.left;
+
+
+            this.fabDragOffsetY =
+                event.clientY -
+                rect.top;
+
+
+            /*
+             * Convertir la posición actual
+             * a left/top.
+             */
+
+            this.fab.style.left =
+                `${rect.left}px`;
+
+            this.fab.style.top =
+                `${rect.top}px`;
+
+            this.fab.style.right =
+                "auto";
+
+            this.fab.style.bottom =
+                "auto";
+
+
+            /*
+             * Capturar el pointer.
+             */
+
+            try {
+
+                this.fab.setPointerCapture(
+                    event.pointerId
+                );
+
+            } catch {
+                // Algunos navegadores móviles
+                // pueden no soportarlo.
+            }
+        },
+        {
+            passive: false
         }
+    );
 
 
-        this.fab.addEventListener(
-            "pointerdown",
-            event => {
+    this.fab.addEventListener(
+        "pointermove",
+        event => {
 
-                /*
-                 * Ignorar botones secundarios
-                 * del mouse.
-                 */
+            if (
+                !this.isDraggingFab
+            ) {
 
-                if (
-                    event.pointerType === "mouse" &&
-                    event.button !== 0
-                ) {
-
-                    return;
-
-                }
+                return;
+            }
 
 
-                const rect =
-                    this.fab.getBoundingClientRect();
+            event.preventDefault();
 
 
-                /*
-                 * Convertir inmediatamente
-                 * la posición actual a left/top.
-                 */
+            /*
+             * Determinar si realmente
+             * comenzó un arrastre.
+             */
 
-                this.fab.style.left =
-                    `${rect.left}px`;
+            const deltaX =
+                event.clientX -
+                startX;
 
-                this.fab.style.top =
-                    `${rect.top}px`;
-
-                this.fab.style.right =
-                    "auto";
-
-                this.fab.style.bottom =
-                    "auto";
+            const deltaY =
+                event.clientY -
+                startY;
 
 
-                this.fabDragOffsetX =
-                    event.clientX -
-                    rect.left;
-
-                this.fabDragOffsetY =
-                    event.clientY -
-                    rect.top;
+            const distance =
+                Math.sqrt(
+                    deltaX * deltaX +
+                    deltaY * deltaY
+                );
 
 
-                this.isDraggingFab =
+            if (
+                distance >=
+                DRAG_THRESHOLD
+            ) {
+
+                pointerMoved =
                     true;
 
-                this.fabPointerMoved =
-                    false;
-
                 this.fabWasDragged =
-                    false;
-
-
-                /*
-                 * Evita comportamientos de selección
-                 * o drag nativo del navegador.
-                 */
-
-                event.preventDefault();
-
-
-                try {
-
-                    this.fab.setPointerCapture(
-                        event.pointerId
-                    );
-
-                } catch {}
-
+                    true;
             }
-        );
 
 
-        this.fab.addEventListener(
-            "pointermove",
-            event => {
+            /*
+             * Si todavía no superó el
+             * umbral, no mover nada.
+             */
 
-                if (
-                    !this.isDraggingFab
-                ) {
+            if (
+                !pointerMoved
+            ) {
 
-                    return;
-
-                }
-
-
-                const movementX =
-                    Math.abs(
-                        event.movementX || 0
-                    );
-
-                const movementY =
-                    Math.abs(
-                        event.movementY || 0
-                    );
+                return;
+            }
 
 
-                /*
-                 * Evitamos considerar como arrastre
-                 * un pequeño movimiento accidental.
-                 */
+            const width =
+                this.fab.offsetWidth;
 
-                if (
-                    movementX > 1 ||
-                    movementY > 1
-                ) {
-
-                    this.fabPointerMoved =
-                        true;
-
-                    this.fabWasDragged =
-                        true;
-
-                }
+            const height =
+                this.fab.offsetHeight;
 
 
-                const width =
-                    this.fab.offsetWidth;
-
-                const height =
-                    this.fab.offsetHeight;
+            let left =
+                event.clientX -
+                this.fabDragOffsetX;
 
 
-                let left =
-                    event.clientX -
-                    this.fabDragOffsetX;
-
-                let top =
-                    event.clientY -
-                    this.fabDragOffsetY;
+            let top =
+                event.clientY -
+                this.fabDragOffsetY;
 
 
-                /*
-                 * Mantener dentro del viewport.
-                 */
+            /*
+             * Mantener el botón dentro
+             * del viewport.
+             */
 
-                left =
-                    Math.max(
-                        0,
-                        Math.min(
-                            left,
-                            window.innerWidth -
-                            width
-                        )
-                    );
-
-
-                top =
-                    Math.max(
-                        0,
-                        Math.min(
-                            top,
-                            window.innerHeight -
-                            height
-                        )
-                    );
+            left =
+                Math.max(
+                    0,
+                    Math.min(
+                        left,
+                        window.innerWidth -
+                        width
+                    )
+                );
 
 
-                this.fab.style.left =
-                    `${left}px`;
-
-                this.fab.style.top =
-                    `${top}px`;
-
-                this.fab.style.right =
-                    "auto";
-
-                this.fab.style.bottom =
-                    "auto";
+            top =
+                Math.max(
+                    0,
+                    Math.min(
+                        top,
+                        window.innerHeight -
+                        height
+                    )
+                );
 
 
-                /*
-                 * El panel acompaña al FAB.
-                 */
+            this.fab.style.left =
+                `${left}px`;
+
+            this.fab.style.top =
+                `${top}px`;
+
+            this.fab.style.right =
+                "auto";
+
+            this.fab.style.bottom =
+                "auto";
+
+
+            /*
+             * El panel acompaña al FAB.
+             */
+
+            if (
+                this.panel &&
+                this.panel.classList.contains(
+                    "open"
+                )
+            ) {
+
+                this.updatePanelPosition();
+            }
+        },
+        {
+            passive: false
+        }
+    );
+
+
+    this.fab.addEventListener(
+        "pointerup",
+        event => {
+
+            if (
+                !this.isDraggingFab
+            ) {
+
+                return;
+            }
+
+
+            event.preventDefault();
+
+
+            this.isDraggingFab =
+                false;
+
+
+            try {
+
+                this.fab.releasePointerCapture(
+                    event.pointerId
+                );
+
+            } catch {
+                // Ignorar.
+            }
+
+
+            /*
+             * Solo guardar si realmente
+             * hubo movimiento.
+             */
+
+            if (
+                pointerMoved
+            ) {
+
+                this.saveFabPosition();
+
 
                 if (
                     this.panel &&
@@ -625,167 +724,94 @@ export class App {
                 ) {
 
                     this.updatePanelPosition();
-
                 }
 
+
+                /*
+                 * Evitar que el click generado
+                 * después del pointerup abra
+                 * accidentalmente el panel.
+                 */
+
+                setTimeout(
+                    () => {
+
+                        this.fabWasDragged =
+                            false;
+
+                    },
+                    150
+                );
             }
-        );
+        },
+        {
+            passive: false
+        }
+    );
 
 
-        this.fab.addEventListener(
-            "pointerup",
-            event => {
+    this.fab.addEventListener(
+        "pointercancel",
+        event => {
 
-                if (
-                    !this.isDraggingFab
-                ) {
+            if (
+                !this.isDraggingFab
+            ) {
 
-                    return;
-
-                }
-
-
-                this.isDraggingFab =
-                    false;
-
-
-                try {
-
-                    this.fab.releasePointerCapture(
-                        event.pointerId
-                    );
-
-                } catch {}
-
-
-                if (
-                    this.fabPointerMoved
-                ) {
-
-                    /*
-                     * Guardar inmediatamente
-                     * la nueva posición.
-                     */
-
-                    this.saveFabPosition();
-
-
-                    /*
-                     * El panel queda sincronizado.
-                     */
-
-                    if (
-                        this.panel &&
-                        this.panel.classList.contains(
-                            "open"
-                        )
-                    ) {
-
-                        this.updatePanelPosition();
-
-                    }
-
-
-                    /*
-                     * Mantener esta bandera durante
-                     * el click que genera pointerup.
-                     */
-
-                    this.fabWasDragged =
-                        true;
-
-
-                    setTimeout(
-                        () => {
-
-                            this.fabWasDragged =
-                                false;
-
-                        },
-                        150
-                    );
-
-                } else {
-
-                    this.fabWasDragged =
-                        false;
-
-                }
-
-
-                this.fabPointerMoved =
-                    false;
-
+                return;
             }
-        );
 
 
-        this.fab.addEventListener(
-            "pointercancel",
-            event => {
-
-                if (
-                    !this.isDraggingFab
-                ) {
-
-                    return;
-
-                }
+            event.preventDefault();
 
 
-                this.isDraggingFab =
-                    false;
+            this.isDraggingFab =
+                false;
 
 
-                try {
-
-                    this.fab.releasePointerCapture(
-                        event.pointerId
-                    );
-
-                } catch {}
-
+            if (
+                pointerMoved
+            ) {
 
                 this.saveFabPosition();
-
-
-                this.fabWasDragged =
-                    false;
-
-                this.fabPointerMoved =
-                    false;
-
             }
-        );
 
 
-        /*
-         * Click separado del arrastre.
-         */
+            pointerMoved =
+                false;
 
-        this.fab.addEventListener(
-            "click",
-            event => {
-
-                if (
-                    this.fabWasDragged
-                ) {
-
-                    event.preventDefault();
-
-                    event.stopPropagation();
-
-                    return;
-
-                }
+            this.fabWasDragged =
+                false;
+        },
+        {
+            passive: false
+        }
+    );
 
 
-                this.toggle();
+    /*
+     * Click separado del arrastre.
+     */
 
+    this.fab.addEventListener(
+        "click",
+        event => {
+
+            if (
+                this.fabWasDragged
+            ) {
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                return;
             }
-        );
 
-    }
+
+            this.toggle();
+        }
+    );
+}
 
 
     /*

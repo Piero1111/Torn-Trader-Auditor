@@ -565,7 +565,19 @@
 			this.queue = [];
 			this.queuedItems = /* @__PURE__ */ new Set();
 			this.running = 0;
+			this.runningWaiters = /* @__PURE__ */ new Map();
 			this.initialized = false;
+			this.started = false;
+			this.passiveCycle = {
+				id: 0,
+				active: false,
+				items: [],
+				index: 0,
+				total: 0,
+				completed: 0,
+				failed: 0,
+				startedAt: 0
+			};
 			this.intervalHandle = null;
 			this.onAuditComplete = null;
 			this.onAuditError = null;
@@ -657,7 +669,6 @@
 					return;
 				}
 				if (this.queuedItems.has(itemId)) {
-					this.runningWaiters = this.runningWaiters || /* @__PURE__ */ new Map();
 					if (!this.runningWaiters.has(itemId)) this.runningWaiters.set(itemId, []);
 					this.runningWaiters.get(itemId).push({
 						resolve,
@@ -668,6 +679,7 @@
 				const queued = {
 					item,
 					priority: true,
+					passive: false,
 					waiters: [{
 						resolve,
 						reject
@@ -685,10 +697,21 @@
 				this.queue.unshift(queued);
 			}
 		}
-		async enqueueDueItems() {
+		async startPassiveCycle() {
+			if (!this.started) return;
+			if (this.passiveCycle.active) {
+				console.warn("[Scheduler] El ciclo pasivo anterior todavía está activo. No se iniciará otro ciclo encima.");
+				return;
+			}
+			const cycleId = ++this.passiveCycle.id;
+			console.log("[Scheduler] Preparando nuevo ciclo de auditoría pasiva...");
 			try {
 				const items = await this.pricelist.getAll();
-				if (!Array.isArray(items) || items.length === 0) return 0;
+				if (cycleId !== this.passiveCycle.id) return;
+				if (!Array.isArray(items)) {
+					console.warn("[Scheduler] Pricelist inválida.");
+					return;
+				}
 				const due = [];
 				for (const item of items) {
 					if (!item) continue;
@@ -699,27 +722,68 @@
 					if (this.queuedItems.has(itemId)) continue;
 					if (this.needsAudit(itemId)) due.push(item);
 				}
-				const batch = due.slice(0, 5);
-				for (const item of batch) {
-					const itemId = Number(item.itemId);
-					this.queue.push({
-						item,
-						priority: false,
-						waiters: []
-					});
-					this.queuedItems.add(itemId);
-				}
-				if (batch.length > 0) console.log(`[Scheduler] Auditoría pasiva: ${batch.length} añadidos. Pendientes: ${due.length}`);
-				this.drain();
-				return batch.length;
+				this.passiveCycle = {
+					id: cycleId,
+					active: true,
+					items: due,
+					index: 0,
+					total: due.length,
+					completed: 0,
+					failed: 0,
+					startedAt: Date.now()
+				};
+				console.log(`[Scheduler] Nuevo ciclo preparado: ${due.length} artículos pendientes.`);
+				this.fillPassiveQueue();
 			} catch (error) {
-				console.error("[Scheduler] Error preparando auditoría pasiva:", error);
-				return 0;
+				console.error("[Scheduler] Error preparando ciclo pasivo:", error);
 			}
+		}
+		fillPassiveQueue() {
+			if (!this.passiveCycle.active) return;
+			const PASSIVE_QUEUE_SIZE = Math.max(5, this.concurrency * 5);
+			while (this.passiveCycle.index < this.passiveCycle.total && this.getPassiveQueuedCount() < PASSIVE_QUEUE_SIZE) {
+				const item = this.passiveCycle.items[this.passiveCycle.index];
+				this.passiveCycle.index++;
+				if (!item) {
+					this.passiveCycle.completed++;
+					continue;
+				}
+				const itemId = Number(item.itemId);
+				if (!this.needsAudit(itemId)) {
+					this.passiveCycle.completed++;
+					continue;
+				}
+				if (this.queuedItems.has(itemId)) continue;
+				this.queue.push({
+					item,
+					priority: false,
+					passive: true,
+					waiters: []
+				});
+				this.queuedItems.add(itemId);
+			}
+			this.drain();
+			this.checkPassiveCycleComplete();
+		}
+		getPassiveQueuedCount() {
+			return this.queue.filter((queued) => queued && queued.passive === true).length;
+		}
+		continuePassiveCycle() {
+			if (!this.passiveCycle.active) return;
+			this.fillPassiveQueue();
+			this.drain();
+		}
+		checkPassiveCycleComplete() {
+			if (!this.passiveCycle.active) return;
+			if (!(this.passiveCycle.index >= this.passiveCycle.total && this.passiveCycle.completed >= this.passiveCycle.total && this.getPassiveQueuedCount() === 0)) return;
+			const elapsed = Date.now() - this.passiveCycle.startedAt;
+			console.log(`[Scheduler] Ciclo pasivo completado: ${this.passiveCycle.total} artículos en ${Math.round(elapsed / 1e3)} segundos.`);
+			this.passiveCycle.active = false;
 		}
 		drain() {
 			while (this.running < this.concurrency && this.queue.length > 0) {
 				const queued = this.queue.shift();
+				if (!queued) continue;
 				this.runAudit(queued);
 			}
 		}
@@ -740,7 +804,7 @@
 						return;
 					}
 				}
-				console.log(`[Scheduler] Auditando ${item.name} (${itemId})`);
+				console.log(`[Scheduler] Auditando ${item.name} (${itemId})` + (queued.priority ? " [PRIORIDAD]" : " [PASIVA]"));
 				const result = await this.auditor.audit(item);
 				if (result && this.history) await this.history.recordSnapshot(result);
 				if (result && Number.isFinite(Number(result.timestamp))) this.lastAuditByItem.set(itemId, Number(result.timestamp));
@@ -758,7 +822,13 @@
 			} finally {
 				this.queuedItems.delete(itemId);
 				this.running--;
+				if (queued.passive) {
+					this.passiveCycle.completed++;
+					if (!this.needsAudit(itemId) && !this.isInvalid(itemId)) {} else this.passiveCycle.failed++;
+				}
 				this.drain();
+				this.continuePassiveCycle();
+				this.checkPassiveCycleComplete();
 			}
 		}
 		resolveWaiters(queued, result, error) {
@@ -768,7 +838,6 @@
 			} catch {}
 		}
 		resolveRunningWaiters(itemId, result, error) {
-			if (!this.runningWaiters) return;
 			const waiters = this.runningWaiters.get(itemId);
 			if (!waiters) return;
 			this.runningWaiters.delete(itemId);
@@ -782,18 +851,31 @@
 			return error?.code === "INVALID_ID" || message === "Incorrect ID" || message.startsWith("Item Value inválido") || message.startsWith("No se pudo obtener Item Value") || message.startsWith("Artículo sin ID válido");
 		}
 		start() {
-			if (!this.initialized) console.warn("[Scheduler] start() llamado sin init().");
-			this.enqueueDueItems();
+			if (this.started) {
+				console.warn("[Scheduler] start() ya fue llamado.");
+				return;
+			}
+			if (!this.initialized) console.warn("[Scheduler] start() llamado antes de init().");
+			this.started = true;
+			this.startPassiveCycle();
 			this.intervalHandle = setInterval(() => {
-				this.enqueueDueItems();
+				if (this.passiveCycle.active) {
+					console.warn("[Scheduler] El ciclo anterior todavía está activo. No se iniciará otro.");
+					return;
+				}
+				console.log("[Scheduler] Iniciando nuevo ciclo horario.");
+				this.startPassiveCycle();
 			}, CONFIG.AUDIT_INTERVAL);
 			console.log("[Scheduler] Auditoría pasiva iniciada.");
 		}
 		stop() {
+			this.started = false;
 			if (this.intervalHandle) {
 				clearInterval(this.intervalHandle);
 				this.intervalHandle = null;
 			}
+			this.passiveCycle.id++;
+			this.passiveCycle.active = false;
 			console.log("[Scheduler] Auditoría pasiva detenida.");
 		}
 	};
@@ -974,6 +1056,10 @@
                 var(--tw3b-shadow);
 
             z-index: 99998;
+            touch-action: none;
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
 
             transition:
                 transform 0.15s ease,
@@ -2004,32 +2090,39 @@
 			this.saveFabPosition();
 		}
 		enableFabDragging() {
-			if (!this.fab) return;
+			let pointerMoved = false;
+			let startX = 0;
+			let startY = 0;
+			const DRAG_THRESHOLD = 6;
 			this.fab.addEventListener("pointerdown", (event) => {
 				if (event.pointerType === "mouse" && event.button !== 0) return;
+				event.preventDefault();
+				this.isDraggingFab = true;
+				pointerMoved = false;
+				this.fabWasDragged = false;
+				startX = event.clientX;
+				startY = event.clientY;
 				const rect = this.fab.getBoundingClientRect();
+				this.fabDragOffsetX = event.clientX - rect.left;
+				this.fabDragOffsetY = event.clientY - rect.top;
 				this.fab.style.left = `${rect.left}px`;
 				this.fab.style.top = `${rect.top}px`;
 				this.fab.style.right = "auto";
 				this.fab.style.bottom = "auto";
-				this.fabDragOffsetX = event.clientX - rect.left;
-				this.fabDragOffsetY = event.clientY - rect.top;
-				this.isDraggingFab = true;
-				this.fabPointerMoved = false;
-				this.fabWasDragged = false;
-				event.preventDefault();
 				try {
 					this.fab.setPointerCapture(event.pointerId);
 				} catch {}
-			});
+			}, { passive: false });
 			this.fab.addEventListener("pointermove", (event) => {
 				if (!this.isDraggingFab) return;
-				const movementX = Math.abs(event.movementX || 0);
-				const movementY = Math.abs(event.movementY || 0);
-				if (movementX > 1 || movementY > 1) {
-					this.fabPointerMoved = true;
+				event.preventDefault();
+				const deltaX = event.clientX - startX;
+				const deltaY = event.clientY - startY;
+				if (Math.sqrt(deltaX * deltaX + deltaY * deltaY) >= DRAG_THRESHOLD) {
+					pointerMoved = true;
 					this.fabWasDragged = true;
 				}
+				if (!pointerMoved) return;
 				const width = this.fab.offsetWidth;
 				const height = this.fab.offsetHeight;
 				let left = event.clientX - this.fabDragOffsetX;
@@ -2041,33 +2134,30 @@
 				this.fab.style.right = "auto";
 				this.fab.style.bottom = "auto";
 				if (this.panel && this.panel.classList.contains("open")) this.updatePanelPosition();
-			});
+			}, { passive: false });
 			this.fab.addEventListener("pointerup", (event) => {
 				if (!this.isDraggingFab) return;
+				event.preventDefault();
 				this.isDraggingFab = false;
 				try {
 					this.fab.releasePointerCapture(event.pointerId);
 				} catch {}
-				if (this.fabPointerMoved) {
+				if (pointerMoved) {
 					this.saveFabPosition();
 					if (this.panel && this.panel.classList.contains("open")) this.updatePanelPosition();
-					this.fabWasDragged = true;
 					setTimeout(() => {
 						this.fabWasDragged = false;
 					}, 150);
-				} else this.fabWasDragged = false;
-				this.fabPointerMoved = false;
-			});
+				}
+			}, { passive: false });
 			this.fab.addEventListener("pointercancel", (event) => {
 				if (!this.isDraggingFab) return;
+				event.preventDefault();
 				this.isDraggingFab = false;
-				try {
-					this.fab.releasePointerCapture(event.pointerId);
-				} catch {}
-				this.saveFabPosition();
+				if (pointerMoved) this.saveFabPosition();
+				pointerMoved = false;
 				this.fabWasDragged = false;
-				this.fabPointerMoved = false;
-			});
+			}, { passive: false });
 			this.fab.addEventListener("click", (event) => {
 				if (this.fabWasDragged) {
 					event.preventDefault();
