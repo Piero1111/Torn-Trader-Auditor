@@ -17,6 +17,7 @@
 		TORN_API_BASE: "https://api.torn.com/v2",
 		W3B_API_BASE: "https://weav3r.dev/api",
 		AUDIT_INTERVAL: 36e5,
+		AUDIT_BATCH_SIZE: 10,
 		SAMPLE_PERCENTAGE: .1,
 		EWMA_ALPHA: .2,
 		GREEN_THRESHOLD: .03,
@@ -69,7 +70,7 @@
 		}
 		performRequest(path) {
 			const separator = path.includes("?") ? "&" : "?";
-			const url = `${CONFIG.TORN_API_BASE}${path}${separator}key=${encodeURIComponent(this.apiKey)}`;
+			const url = `${CONFIG.TORN_API_BASE}${path}${separator}key=` + encodeURIComponent(this.apiKey);
 			return new Promise((resolve, reject) => {
 				GM_xmlhttpRequest({
 					method: "GET",
@@ -127,32 +128,41 @@
 			this.apiKey = apiKey;
 		}
 		async getPricelist(userId) {
+			if (userId === null || userId === void 0 || String(userId).trim() === "") throw new Error("W3B User ID es obligatorio.");
 			const url = `${CONFIG.W3B_API_BASE}/pricelist/${encodeURIComponent(userId)}`;
 			return new Promise((resolve, reject) => {
+				const headers = {};
+				if (this.apiKey) headers["Authorization"] = `Bearer ${this.apiKey}`;
 				GM_xmlhttpRequest({
 					method: "GET",
 					url,
+					headers,
 					onload: (response) => {
 						if (response.status < 200 || response.status >= 300) {
 							reject(/* @__PURE__ */ new Error(`W3B API HTTP ${response.status}`));
 							return;
 						}
+						let data;
 						try {
-							const data = JSON.parse(response.responseText);
-							if (!Array.isArray(data)) {
-								reject(/* @__PURE__ */ new Error("Formato inesperado de pricelist W3B"));
-								return;
-							}
-							resolve(data);
+							data = JSON.parse(response.responseText);
 						} catch (error) {
 							reject(/* @__PURE__ */ new Error(`Error parseando respuesta W3B: ${error.message}`));
+							return;
 						}
+						if (!Array.isArray(data)) {
+							reject(/* @__PURE__ */ new Error("Formato inesperado de pricelist W3B"));
+							return;
+						}
+						resolve(data);
 					},
 					onerror: () => {
 						reject(/* @__PURE__ */ new Error("No se pudo conectar con W3B API"));
 					},
 					ontimeout: () => {
 						reject(/* @__PURE__ */ new Error("Timeout conectando con W3B API"));
+					},
+					onabort: () => {
+						reject(/* @__PURE__ */ new Error("Solicitud a W3B API cancelada"));
 					}
 				});
 			});
@@ -170,7 +180,6 @@
 			this.pricelistKey = `${PREFIX}pricelist`;
 			this.auditKey = `${PREFIX}audits`;
 			this.historyKey = `${PREFIX}history`;
-			this.ratioKey = `${PREFIX}ratios`;
 			this.engine = hasGM() ? "gm" : "localStorage";
 		}
 		async read(key, fallback) {
@@ -178,15 +187,24 @@
 				let raw;
 				if (this.engine === "gm") raw = await Promise.resolve(GM_getValue(key, null));
 				else raw = localStorage.getItem(key);
-				return raw ? JSON.parse(raw) : fallback;
-			} catch {
+				if (raw === null || raw === void 0 || raw === "") return fallback;
+				if (typeof raw === "object") return raw;
+				return JSON.parse(raw);
+			} catch (error) {
+				console.warn(`[Storage] Error leyendo ${key}:`, error);
 				return fallback;
 			}
 		}
 		async write(key, value) {
-			const serialized = JSON.stringify(value);
-			if (this.engine === "gm") await Promise.resolve(GM_setValue(key, serialized));
-			else localStorage.setItem(key, serialized);
+			try {
+				const serialized = JSON.stringify(value);
+				if (this.engine === "gm") await Promise.resolve(GM_setValue(key, serialized));
+				else localStorage.setItem(key, serialized);
+				return true;
+			} catch (error) {
+				console.error(`[Storage] Error guardando ${key}:`, error);
+				throw error;
+			}
 		}
 		async saveConfig(config) {
 			const merged = {
@@ -206,7 +224,7 @@
 		}
 		async savePricelist(items) {
 			const normalized = {
-				items,
+				items: Array.isArray(items) ? items : [],
 				lastSync: Date.now()
 			};
 			await this.write(this.pricelistKey, normalized);
@@ -219,46 +237,59 @@
 			});
 		}
 		async saveAudit(audit) {
+			if (!audit || !Number.isFinite(Number(audit.itemId))) throw new Error("No se puede guardar una auditoría sin itemId válido.");
 			const audits = await this.read(this.auditKey, {});
-			audits[audit.itemId] = audit;
+			audits[Number(audit.itemId)] = audit;
 			await this.write(this.auditKey, audits);
+			return audit;
 		}
 		async getAudit(itemId) {
-			return (await this.read(this.auditKey, {}))[itemId] || null;
+			const numericId = Number(itemId);
+			if (!Number.isFinite(numericId)) return null;
+			return (await this.read(this.auditKey, {}))[numericId] || null;
 		}
 		async getAllAudits() {
 			return this.read(this.auditKey, {});
 		}
 		async saveHistory(audit) {
+			if (!audit || !Number.isFinite(Number(audit.itemId))) throw new Error("No se puede guardar historial sin itemId válido.");
 			const history = await this.read(this.historyKey, {});
-			if (!history[audit.itemId]) history[audit.itemId] = [];
-			history[audit.itemId].push({
-				timestamp: audit.timestamp,
-				realMarketValue: audit.realMarketValue,
-				correctBuyPrice: audit.correctBuyPrice,
-				learnedRatio: audit.learnedRatio,
-				w3bBuyPrice: audit.w3bBuyPrice,
-				confidence: audit.confidence,
-				status: audit.status
+			const itemId = Number(audit.itemId);
+			if (!Array.isArray(history[itemId])) history[itemId] = [];
+			history[itemId].push({
+				timestamp: Number(audit.timestamp) || Date.now(),
+				realMarketValue: Number(audit.realMarketValue) || null,
+				correctBuyPrice: Number(audit.correctBuyPrice) || null,
+				learnedRatio: Number(audit.learnedRatio) || null,
+				observedRatio: Number(audit.observedRatio) || null,
+				w3bBuyPrice: Number(audit.w3bBuyPrice) || null,
+				itemValue: Number(audit.itemValue) || null,
+				confidence: Number(audit.confidence) || 0,
+				status: audit.status || null
 			});
-			history[audit.itemId] = this.pruneHistory(history[audit.itemId]);
+			history[itemId] = this.pruneHistory(history[itemId]);
 			await this.write(this.historyKey, history);
 		}
 		async getHistory(itemId) {
-			return (await this.read(this.historyKey, {}))[itemId] || [];
+			const numericId = Number(itemId);
+			if (!Number.isFinite(numericId)) return [];
+			const history = await this.read(this.historyKey, {});
+			return Array.isArray(history[numericId]) ? history[numericId] : [];
 		}
 		async getRecentlyUpdatedItems(limit = 10) {
 			const history = await this.read(this.historyKey, {});
 			return Object.entries(history).map(([itemId, snapshots]) => {
+				const last = Array.isArray(snapshots) && snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
 				return {
 					itemId,
-					lastHistoryUpdate: snapshots[snapshots.length - 1]?.timestamp ?? 0
+					lastHistoryUpdate: Number(last?.timestamp) || 0
 				};
-			}).sort((a, b) => b.lastHistoryUpdate - a.lastHistoryUpdate).slice(0, limit);
+			}).sort((a, b) => b.lastHistoryUpdate - a.lastHistoryUpdate).slice(0, Math.max(0, Number(limit) || 10));
 		}
 		pruneHistory(snapshots) {
+			if (!Array.isArray(snapshots)) return [];
 			const cutoff = Date.now() - CONFIG.HISTORY_DAYS * 24 * 60 * 60 * 1e3;
-			return snapshots.filter((snapshot) => snapshot.timestamp >= cutoff);
+			return snapshots.filter((snapshot) => Number(snapshot?.timestamp) >= cutoff);
 		}
 	};
 	//#endregion
@@ -341,15 +372,22 @@
 	//#region src/market/marketAnalyzer.js
 	var MarketAnalyzer = class {
 		constructor(samplePercentage = .1) {
-			this.samplePercentage = samplePercentage;
+			this.samplePercentage = Number.isFinite(Number(samplePercentage)) && Number(samplePercentage) > 0 && Number(samplePercentage) <= 1 ? Number(samplePercentage) : .1;
 		}
 		analyze(rawListings) {
-			const listings = rawListings.filter((listing) => Number.isFinite(listing.price) && Number.isFinite(listing.amount) && listing.price > 0 && listing.amount > 0).map((listing) => ({
-				price: Number(listing.price),
-				amount: Number(listing.amount)
-			})).sort((a, b) => a.price - b.price);
+			if (!Array.isArray(rawListings)) return null;
+			const listings = rawListings.map((listing) => {
+				const price = Number(listing?.price);
+				const amount = Number(listing?.amount);
+				if (!Number.isFinite(price) || !Number.isFinite(amount) || price <= 0 || amount <= 0) return null;
+				return {
+					price,
+					amount
+				};
+			}).filter(Boolean).sort((a, b) => a.price - b.price);
 			if (listings.length === 0) return null;
 			const totalQuantity = listings.reduce((sum, listing) => sum + listing.amount, 0);
+			if (!Number.isFinite(totalQuantity) || totalQuantity <= 0) return null;
 			const sampleTarget = totalQuantity * this.samplePercentage;
 			const targetQuantity = Math.max(1, Math.ceil(sampleTarget));
 			const sample = [];
@@ -357,28 +395,32 @@
 			for (const listing of listings) {
 				if (remaining <= 0) break;
 				const quantity = Math.min(listing.amount, remaining);
+				if (quantity <= 0) continue;
 				sample.push({
 					price: listing.price,
 					amount: quantity
 				});
 				remaining -= quantity;
 			}
+			const sampleQuantity = sample.reduce((sum, listing) => sum + listing.amount, 0);
+			if (sample.length === 0 || sampleQuantity <= 0) return null;
 			const mean = weightedMean(sample);
 			const median = weightedMedian(sample);
-			let realMarketValue;
-			if (mean === null || median === null) return null;
+			if (!Number.isFinite(mean) || !Number.isFinite(median)) return null;
 			const dispersion = calculateDispersion(mean, median);
+			let realMarketValue;
 			if (dispersion !== null && dispersion <= .15) realMarketValue = (mean + median) / 2;
 			else realMarketValue = median;
+			if (!Number.isFinite(realMarketValue) || realMarketValue <= 0) return null;
 			const confidence = this.calculateConfidence({
 				totalQuantity,
-				sampleQuantity: targetQuantity,
+				sampleQuantity,
 				listingsCount: listings.length,
 				dispersion
 			});
 			return {
 				totalQuantity,
-				sampleQuantity: targetQuantity,
+				sampleQuantity,
 				weightedMean: mean,
 				weightedMedian: median,
 				dispersion,
@@ -399,25 +441,37 @@
 			if (listingsCount >= 50) score += 15;
 			else if (listingsCount >= 20) score += 10;
 			else if (listingsCount >= 5) score += 5;
-			if (dispersion !== null) {
+			if (Number.isFinite(dispersion)) {
 				if (dispersion <= .05) score += 15;
 				else if (dispersion <= .1) score += 10;
 				else if (dispersion <= .2) score += 5;
 			}
-			return Math.min(100, score);
+			return Math.min(100, Math.max(0, score));
 		}
 	};
 	//#endregion
 	//#region src/auditor/ratioLearner.js
 	var RatioLearner = class {
 		calculateObservedRatio(buyPrice, itemValue) {
-			if (!Number.isFinite(buyPrice) || !Number.isFinite(itemValue) || itemValue <= 0) return null;
-			return buyPrice / itemValue;
+			const buy = Number(buyPrice);
+			const value = Number(itemValue);
+			if (!Number.isFinite(buy) || !Number.isFinite(value) || buy <= 0 || value <= 0) return null;
+			return buy / value;
 		}
 		update(previousRatio, observedRatio) {
-			if (!Number.isFinite(observedRatio)) return previousRatio;
-			if (!Number.isFinite(previousRatio)) return observedRatio;
-			return CONFIG.EWMA_ALPHA * observedRatio + (1 - CONFIG.EWMA_ALPHA) * previousRatio;
+			const observed = Number(observedRatio);
+			const previous = Number(previousRatio);
+			if (!Number.isFinite(observed) || observed <= 0) return Number.isFinite(previous) ? previous : null;
+			if (!Number.isFinite(previous) || previous <= 0) return observed;
+			const alpha = Number(CONFIG.EWMA_ALPHA);
+			const safeAlpha = Number.isFinite(alpha) ? Math.min(1, Math.max(0, alpha)) : .2;
+			return safeAlpha * observed + (1 - safeAlpha) * previous;
+		}
+		calculateCorrectBuyPrice(itemValue, learnedRatio) {
+			const value = Number(itemValue);
+			const ratio = Number(learnedRatio);
+			if (!Number.isFinite(value) || value <= 0 || !Number.isFinite(ratio) || ratio <= 0) return null;
+			return value * ratio;
 		}
 	};
 	//#endregion
@@ -430,25 +484,30 @@
 			this.storage = storage;
 		}
 		async audit(item) {
+			if (!item) throw new Error("No se recibió un artículo para auditar.");
 			const itemId = Number(item.itemId);
+			const buyPrice = Number(item.buyPrice);
+			if (!Number.isInteger(itemId) || itemId <= 0) throw new Error("ID de artículo inválido.");
+			if (!Number.isFinite(buyPrice) || buyPrice <= 0) throw new Error(`Precio de compra W3B inválido para ${item.name}.`);
 			const itemResponse = await this.tornAPI.getItem(itemId);
-			const itemData = this.extractItem(itemResponse);
-			const marketResponse = await this.tornAPI.getItemMarket(itemId);
-			const itemValue = itemData.itemValue;
-			const observedRatio = this.ratioLearner.calculateObservedRatio(item.buyPrice, itemValue);
+			const itemValue = this.extractItem(itemResponse).itemValue;
+			const observedRatio = this.ratioLearner.calculateObservedRatio(buyPrice, itemValue);
+			if (!Number.isFinite(observedRatio)) throw new Error(`No se pudo calcular el porcentaje W3B para ${item.name}.`);
 			const previousAudit = await this.storage.getAudit(itemId);
 			const learnedRatio = this.ratioLearner.update(previousAudit?.learnedRatio, observedRatio);
+			if (!Number.isFinite(learnedRatio)) throw new Error(`No se pudo determinar el porcentaje aprendido para ${item.name}.`);
+			const marketResponse = await this.tornAPI.getItemMarket(itemId);
 			const listings = marketResponse?.itemmarket?.listings || [];
 			const marketAnalysis = this.marketAnalyzer.analyze(listings);
-			if (!marketAnalysis) throw new Error(`No hay suficientes datos de mercado para ${item.name}`);
+			if (!marketAnalysis) throw new Error(`No hay suficientes datos de mercado para ${item.name}.`);
 			const correctBuyPrice = marketAnalysis.realMarketValue * learnedRatio;
-			const differencePercent = correctBuyPrice > 0 ? Math.abs(item.buyPrice - correctBuyPrice) / correctBuyPrice : null;
+			const differencePercent = correctBuyPrice > 0 ? Math.abs(buyPrice - correctBuyPrice) / correctBuyPrice : null;
 			const status = this.calculateStatus(differencePercent);
 			const result = {
 				itemId,
 				itemName: item.name,
 				itemValue,
-				w3bBuyPrice: item.buyPrice,
+				w3bBuyPrice: buyPrice,
 				observedRatio,
 				learnedRatio,
 				totalMarketQuantity: marketAnalysis.totalQuantity,
@@ -476,9 +535,9 @@
 		}
 		extractItem(response) {
 			const item = response?.items?.[0];
-			if (!item) throw new Error("Torn API no devolvió información del artículo");
+			if (!item) throw new Error("Torn API no devolvió información del artículo.");
 			const itemValue = Number(item.value?.market_price);
-			if (!Number.isFinite(itemValue) || itemValue <= 0) throw new Error(`Item Value inválido para ${item.name}`);
+			if (!Number.isFinite(itemValue) || itemValue <= 0) throw new Error(`Item Value inválido para ${item.name}.`);
 			return {
 				id: Number(item.id),
 				name: item.name,
@@ -495,12 +554,14 @@
 			this.pricelist = pricelist;
 			this.storage = storage;
 			this.history = history;
-			this.concurrency = concurrency;
+			this.concurrency = Math.max(1, Number(concurrency) || 1);
 			this.lastAuditByItem = /* @__PURE__ */ new Map();
 			this.invalidItems = /* @__PURE__ */ new Map();
 			this.queue = [];
+			this.queuedItems = /* @__PURE__ */ new Set();
 			this.running = 0;
 			this.initialized = false;
+			this.intervalHandle = null;
 			this.onAuditComplete = null;
 			this.onAuditError = null;
 		}
@@ -510,23 +571,27 @@
 				if (!raw) return;
 				const parsed = JSON.parse(raw);
 				if (!parsed || typeof parsed !== "object") return;
-				for (const [itemId, value] of Object.entries(parsed)) this.invalidItems.set(Number(itemId), value);
+				for (const [itemId, value] of Object.entries(parsed)) {
+					const numericId = Number(itemId);
+					if (Number.isFinite(numericId) && numericId > 0) this.invalidItems.set(numericId, value);
+				}
 			} catch (error) {
 				console.warn("[Scheduler] No se pudo cargar lista de inválidos:", error);
 			}
 		}
 		saveInvalidItems() {
 			try {
-				const data = Object.fromEntries(this.invalidItems);
-				localStorage.setItem(INVALID_ITEMS_STORAGE_KEY, JSON.stringify(data));
+				localStorage.setItem(INVALID_ITEMS_STORAGE_KEY, JSON.stringify(Object.fromEntries(this.invalidItems)));
 			} catch (error) {
 				console.warn("[Scheduler] No se pudo guardar lista de inválidos:", error);
 			}
 		}
 		markInvalid(item, error) {
-			this.invalidItems.set(Number(item.itemId), {
-				name: item.name,
-				reason: error.message,
+			const itemId = Number(item?.itemId);
+			if (!Number.isFinite(itemId) || itemId <= 0) return;
+			this.invalidItems.set(itemId, {
+				name: item?.name || "Artículo desconocido",
+				reason: error?.message || "Error desconocido",
 				timestamp: Date.now()
 			});
 			this.saveInvalidItems();
@@ -538,98 +603,193 @@
 			const audits = await this.storage.getAllAudits();
 			for (const itemId in audits) {
 				const audit = audits[itemId];
-				if (audit && Number.isFinite(Number(audit.timestamp))) this.lastAuditByItem.set(Number(itemId), Number(audit.timestamp));
+				const timestamp = Number(audit?.timestamp);
+				if (Number.isFinite(timestamp) && timestamp > 0) this.lastAuditByItem.set(Number(itemId), timestamp);
 			}
 			this.loadInvalidItems();
 			this.initialized = true;
-			console.log(`[Scheduler] ${this.invalidItems.size} artículos descartados cargados`);
+			console.log(`[Scheduler] Inicializado: ${this.lastAuditByItem.size} auditorías cacheadas, ${this.invalidItems.size} artículos inválidos.`);
 		}
 		needsAudit(itemId) {
 			const numericId = Number(itemId);
+			if (!Number.isFinite(numericId) || numericId <= 0) return false;
 			if (this.isInvalid(numericId)) return false;
 			const last = this.lastAuditByItem.get(numericId);
 			if (!last) return true;
 			return Date.now() - last >= CONFIG.AUDIT_INTERVAL;
 		}
 		async getOrAudit(item) {
-			if (this.isInvalid(item.itemId)) return null;
-			if (!this.needsAudit(item.itemId)) {
-				const cached = await this.storage.getAudit(item.itemId);
+			if (!item) return null;
+			const itemId = Number(item.itemId);
+			if (!Number.isFinite(itemId) || itemId <= 0) throw new Error("Artículo sin ID válido");
+			if (this.isInvalid(itemId)) return null;
+			if (!this.needsAudit(itemId)) {
+				const cached = await this.storage.getAudit(itemId);
 				if (cached) return cached;
 			}
 			return this.auditPriority(item);
 		}
 		auditPriority(item) {
-			if (this.isInvalid(item.itemId)) return Promise.reject(/* @__PURE__ */ new Error(`Artículo descartado: ${item.name}`));
 			return new Promise((resolve, reject) => {
-				this.queue.unshift({
+				const itemId = Number(item?.itemId);
+				if (!Number.isFinite(itemId) || itemId <= 0) {
+					reject(/* @__PURE__ */ new Error("Artículo sin ID válido"));
+					return;
+				}
+				if (this.isInvalid(itemId)) {
+					resolve(null);
+					return;
+				}
+				const existing = this.queue.find((queued) => Number(queued.item.itemId) === itemId);
+				if (existing) {
+					existing.priority = true;
+					existing.waiters.push({
+						resolve,
+						reject
+					});
+					this.promotePriority(existing);
+					this.drain();
+					return;
+				}
+				if (this.queuedItems.has(itemId)) {
+					this.runningWaiters = this.runningWaiters || /* @__PURE__ */ new Map();
+					if (!this.runningWaiters.has(itemId)) this.runningWaiters.set(itemId, []);
+					this.runningWaiters.get(itemId).push({
+						resolve,
+						reject
+					});
+					return;
+				}
+				const queued = {
 					item,
 					priority: true,
-					resolve,
-					reject
-				});
+					waiters: [{
+						resolve,
+						reject
+					}]
+				};
+				this.queue.unshift(queued);
+				this.queuedItems.add(itemId);
 				this.drain();
 			});
 		}
+		promotePriority(queued) {
+			const index = this.queue.indexOf(queued);
+			if (index > 0) {
+				this.queue.splice(index, 1);
+				this.queue.unshift(queued);
+			}
+		}
 		async enqueueDueItems() {
-			const due = (await this.pricelist.getAll()).filter((item) => {
-				if (!item) return false;
-				if (!Number.isFinite(Number(item.itemId))) return false;
-				if (typeof item.name !== "string" || !item.name.trim()) return false;
-				if (!Number.isFinite(Number(item.buyPrice)) || Number(item.buyPrice) <= 0) return false;
-				if (this.isInvalid(item.itemId)) return false;
-				return this.needsAudit(item.itemId);
-			});
-			const batch = due.slice(0, 10);
-			for (const item of batch) this.queue.push({
-				item,
-				priority: false
-			});
-			if (batch.length > 0) console.log(`[Scheduler] ${batch.length} artículos añadidos a la cola (pendientes: ${Math.max(0, due.length - batch.length)})`);
-			this.drain();
-			return batch.length;
+			try {
+				const items = await this.pricelist.getAll();
+				if (!Array.isArray(items) || items.length === 0) return 0;
+				const due = [];
+				for (const item of items) {
+					if (!item) continue;
+					const itemId = Number(item.itemId);
+					const buyPrice = Number(item.buyPrice);
+					if (!Number.isFinite(itemId) || itemId <= 0 || typeof item.name !== "string" || !item.name.trim() || !Number.isFinite(buyPrice) || buyPrice <= 0) continue;
+					if (this.isInvalid(itemId)) continue;
+					if (this.queuedItems.has(itemId)) continue;
+					if (this.needsAudit(itemId)) due.push(item);
+				}
+				const batch = due.slice(0, 5);
+				for (const item of batch) {
+					const itemId = Number(item.itemId);
+					this.queue.push({
+						item,
+						priority: false,
+						waiters: []
+					});
+					this.queuedItems.add(itemId);
+				}
+				if (batch.length > 0) console.log(`[Scheduler] Auditoría pasiva: ${batch.length} añadidos. Pendientes: ${due.length}`);
+				this.drain();
+				return batch.length;
+			} catch (error) {
+				console.error("[Scheduler] Error preparando auditoría pasiva:", error);
+				return 0;
+			}
 		}
 		drain() {
 			while (this.running < this.concurrency && this.queue.length > 0) {
-				const next = this.queue.shift();
-				this.runAudit(next);
+				const queued = this.queue.shift();
+				this.runAudit(queued);
 			}
 		}
 		async runAudit(queued) {
-			const { item, resolve, reject } = queued;
+			const item = queued.item;
+			const itemId = Number(item.itemId);
 			this.running++;
 			try {
-				if (this.isInvalid(item.itemId)) {
-					if (reject) reject(/* @__PURE__ */ new Error(`Artículo descartado: ${item.name}`));
+				if (this.isInvalid(itemId)) {
+					const error = /* @__PURE__ */ new Error(`Artículo descartado: ${item.name}`);
+					this.resolveWaiters(queued, null, error);
 					return;
 				}
+				if (!this.needsAudit(itemId)) {
+					const cached = await this.storage.getAudit(itemId);
+					if (cached) {
+						this.resolveWaiters(queued, cached, null);
+						return;
+					}
+				}
+				console.log(`[Scheduler] Auditando ${item.name} (${itemId})`);
 				const result = await this.auditor.audit(item);
-				await this.history.recordSnapshot(result);
-				this.lastAuditByItem.set(item.itemId, result.timestamp);
-				if (this.onAuditComplete) this.onAuditComplete(result);
-				if (resolve) resolve(result);
+				if (result && this.history) await this.history.recordSnapshot(result);
+				if (result && Number.isFinite(Number(result.timestamp))) this.lastAuditByItem.set(itemId, Number(result.timestamp));
+				if (this.onAuditComplete && result) this.onAuditComplete(result);
+				this.resolveWaiters(queued, result, null);
+				this.resolveRunningWaiters(itemId, result, null);
 			} catch (error) {
-				if (error?.code === "INVALID_ID" || error?.message === "Incorrect ID" || error?.message?.startsWith("Item Value inválido") || error?.message?.startsWith("No se pudo obtener Item Value")) {
+				if (this.isPermanentError(error)) {
 					this.markInvalid(item, error);
 					console.warn(`[TornW3B] ${item.name} descartado permanentemente: ${error.message}`);
 				} else if (this.onAuditError) this.onAuditError(item, error);
 				else console.error(`[Scheduler] Error auditando ${item.name}:`, error);
-				if (reject) reject(error);
+				this.resolveWaiters(queued, null, error);
+				this.resolveRunningWaiters(itemId, null, error);
 			} finally {
+				this.queuedItems.delete(itemId);
 				this.running--;
 				this.drain();
 			}
 		}
+		resolveWaiters(queued, result, error) {
+			for (const waiter of queued.waiters || []) try {
+				if (error) waiter.reject(error);
+				else waiter.resolve(result);
+			} catch {}
+		}
+		resolveRunningWaiters(itemId, result, error) {
+			if (!this.runningWaiters) return;
+			const waiters = this.runningWaiters.get(itemId);
+			if (!waiters) return;
+			this.runningWaiters.delete(itemId);
+			for (const waiter of waiters) try {
+				if (error) waiter.reject(error);
+				else waiter.resolve(result);
+			} catch {}
+		}
+		isPermanentError(error) {
+			const message = String(error?.message || "");
+			return error?.code === "INVALID_ID" || message === "Incorrect ID" || message.startsWith("Item Value inválido") || message.startsWith("No se pudo obtener Item Value") || message.startsWith("Artículo sin ID válido");
+		}
 		start() {
-			if (!this.initialized) console.warn("[Scheduler] start() llamado sin init() previo.");
+			if (!this.initialized) console.warn("[Scheduler] start() llamado sin init().");
 			this.enqueueDueItems();
-			this.intervalHandle = setInterval(() => this.enqueueDueItems(), CONFIG.AUDIT_INTERVAL);
+			this.intervalHandle = setInterval(() => {
+				this.enqueueDueItems();
+			}, CONFIG.AUDIT_INTERVAL);
+			console.log("[Scheduler] Auditoría pasiva iniciada.");
 		}
 		stop() {
 			if (this.intervalHandle) {
 				clearInterval(this.intervalHandle);
 				this.intervalHandle = null;
 			}
+			console.log("[Scheduler] Auditoría pasiva detenida.");
 		}
 	};
 	//#endregion
@@ -642,37 +802,46 @@
 			this.initialized = false;
 		}
 		async getTornDay() {
-			const timestamp = (await this.tornAPI.getTimestamp())?.timestamp ?? Math.floor(Date.now() / 1e3);
-			return Math.floor(timestamp / 86400);
+			const response = await this.tornAPI.getTimestamp();
+			const timestamp = Number(response?.timestamp);
+			const validTimestamp = Number.isFinite(timestamp) ? timestamp : Math.floor(Date.now() / 1e3);
+			return Math.floor(validTimestamp / 86400);
 		}
 		async init() {
-			const audits = await this.storage.getAllAudits();
-			for (const itemId in audits) {
-				const history = await this.storage.getHistory(Number(itemId));
-				const last = history[history.length - 1];
-				if (last) {
-					const day = Math.floor(last.timestamp / 864e5);
-					this.lastDayByItem.set(Number(itemId), day);
-				}
+			const history = await this.storage.getAllHistory();
+			this.lastDayByItem.clear();
+			for (const [itemId, snapshots] of Object.entries(history)) {
+				if (!Array.isArray(snapshots) || snapshots.length === 0) continue;
+				const last = snapshots[snapshots.length - 1];
+				if (!last || !Number.isFinite(Number(last.timestamp))) continue;
+				const day = Math.floor(Number(last.timestamp) / 864e5);
+				this.lastDayByItem.set(Number(itemId), day);
 			}
 			this.initialized = true;
 		}
 		async recordSnapshot(audit) {
+			if (!audit || !Number.isFinite(Number(audit.itemId))) return null;
+			if (!this.initialized) await this.init();
+			const itemId = Number(audit.itemId);
 			const tornDay = await this.getTornDay();
-			if (this.lastDayByItem.get(audit.itemId) === tornDay) return null;
-			await this.storage.saveHistory(audit);
-			this.lastDayByItem.set(audit.itemId, tornDay);
-			return audit;
+			if (this.lastDayByItem.get(itemId) === tornDay) return null;
+			const snapshot = {
+				...audit,
+				timestamp: Number.isFinite(Number(audit.timestamp)) ? Number(audit.timestamp) : Date.now()
+			};
+			await this.storage.saveHistory(snapshot);
+			this.lastDayByItem.set(itemId, tornDay);
+			return snapshot;
 		}
 		async getSeries(itemId) {
-			return (await this.storage.getHistory(itemId)).map((snapshot) => ({
-				timestamp: snapshot.timestamp,
-				realMarketValue: snapshot.realMarketValue,
-				correctBuyPrice: snapshot.correctBuyPrice
+			return (await this.storage.getHistory(Number(itemId))).filter((snapshot) => snapshot && Number.isFinite(Number(snapshot.timestamp))).map((snapshot) => ({
+				timestamp: Number(snapshot.timestamp),
+				realMarketValue: Number(snapshot.realMarketValue),
+				correctBuyPrice: Number(snapshot.correctBuyPrice)
 			}));
 		}
 		async getSummary(itemId) {
-			const history = await this.storage.getHistory(itemId);
+			const history = await this.storage.getHistory(Number(itemId));
 			const now = Date.now();
 			const day = 864e5;
 			const buckets = {
@@ -682,11 +851,12 @@
 				last6m: []
 			};
 			for (const snapshot of history) {
-				const age = now - snapshot.timestamp;
-				if (age <= day) buckets.yesterday.push(snapshot);
-				if (age <= 7 * day) buckets.last7d.push(snapshot);
-				if (age <= 30 * day) buckets.last30d.push(snapshot);
-				if (age <= 180 * day) buckets.last6m.push(snapshot);
+				if (!snapshot || !Number.isFinite(Number(snapshot.timestamp))) continue;
+				const age = now - Number(snapshot.timestamp);
+				if (age > day && age <= 2 * day) buckets.yesterday.push(snapshot);
+				if (age >= 0 && age <= 7 * day) buckets.last7d.push(snapshot);
+				if (age >= 0 && age <= 30 * day) buckets.last30d.push(snapshot);
+				if (age >= 0 && age <= 180 * day) buckets.last6m.push(snapshot);
 			}
 			return {
 				yesterday: this.aggregate(buckets.yesterday),
@@ -696,17 +866,20 @@
 			};
 		}
 		aggregate(snapshots) {
-			if (snapshots.length === 0) return null;
+			if (!Array.isArray(snapshots) || snapshots.length === 0) return null;
 			const count = snapshots.length;
-			const sum = (key) => snapshots.reduce((total, s) => total + (s[key] ?? 0), 0);
-			const latest = snapshots[snapshots.length - 1];
+			const sum = (key) => snapshots.reduce((total, snapshot) => {
+				const value = Number(snapshot?.[key]);
+				return total + (Number.isFinite(value) ? value : 0);
+			}, 0);
+			const latest = snapshots.filter((snapshot) => Number.isFinite(Number(snapshot?.timestamp))).sort((a, b) => Number(a.timestamp) - Number(b.timestamp)).at(-1);
 			return {
 				avgRealMarketValue: sum("realMarketValue") / count,
 				avgCorrectBuyPrice: sum("correctBuyPrice") / count,
 				avgLearnedRatio: sum("learnedRatio") / count,
-				latestW3bBuyPrice: latest.w3bBuyPrice,
-				latestConfidence: latest.confidence,
-				latestStatus: latest.status,
+				latestW3bBuyPrice: latest?.w3bBuyPrice ?? null,
+				latestConfidence: latest?.confidence ?? null,
+				latestStatus: latest?.status ?? null,
 				samples: count
 			};
 		}
@@ -1036,34 +1209,28 @@
 			this.views = views;
 			this.currentView = VIEWS.MENU;
 			this.activeViewInstance = null;
-			this.root = null;
+			this.fab = null;
 			this.panel = null;
 			this.panelBody = null;
-			this.fab = null;
+			this.searchInput = null;
+			this.iconBar = null;
 		}
 		mount() {
 			injectStyles();
 			this.fab = document.createElement("button");
 			this.fab.className = "tw3b-fab";
-			this.fab.textContent = "💰";
+			this.fab.type = "button";
+			this.fab.innerHTML = "💰";
+			this.fab.setAttribute("aria-label", "Abrir TornW3B Trader");
 			this.fab.addEventListener("click", () => this.toggle());
 			this.panel = document.createElement("div");
 			this.panel.className = "tw3b-panel";
-			const header = document.createElement("div");
-			header.className = "tw3b-panel-header";
-			header.innerHTML = `<span>TornW3B Trader</span>`;
-			const closeBtn = document.createElement("span");
-			closeBtn.textContent = "✕";
-			closeBtn.style.cursor = "pointer";
-			closeBtn.addEventListener("click", () => this.close());
-			header.appendChild(closeBtn);
 			this.panelBody = document.createElement("div");
 			this.panelBody.className = "tw3b-panel-body";
-			this.panel.appendChild(header);
 			this.panel.appendChild(this.panelBody);
 			document.body.appendChild(this.fab);
 			document.body.appendChild(this.panel);
-			this.navigate(VIEWS.MENU);
+			this.renderMenu();
 			this.refreshAlertBadge();
 		}
 		toggle() {
@@ -1072,13 +1239,158 @@
 		}
 		open() {
 			this.panel.classList.add("open");
+			if (this.searchInput) setTimeout(() => {
+				this.searchInput.focus();
+			}, 100);
 		}
 		close() {
 			this.panel.classList.remove("open");
+			this.hideSuggestions();
+		}
+		renderMenu() {
+			this.currentView = VIEWS.MENU;
+			this.activeViewInstance = null;
+			this.panelBody.innerHTML = "";
+			const toolbar = document.createElement("div");
+			toolbar.className = "tw3b-toolbar";
+			const searchWrapper = document.createElement("div");
+			searchWrapper.className = "tw3b-search-wrapper";
+			this.searchInput = document.createElement("input");
+			this.searchInput.className = "tw3b-search";
+			this.searchInput.type = "text";
+			this.searchInput.placeholder = "🔎 Buscar artículo...";
+			this.searchInput.autocomplete = "off";
+			this.searchInput.addEventListener("input", (event) => {
+				this.handleSearch(event.target.value);
+			});
+			searchWrapper.appendChild(this.searchInput);
+			this.iconBar = document.createElement("div");
+			this.iconBar.className = "tw3b-icon-bar";
+			this.createIconButton({
+				icon: "🛡️",
+				title: "Auditoría",
+				view: VIEWS.AUDIT,
+				badge: true
+			});
+			this.createIconButton({
+				icon: "📜",
+				title: "Historial",
+				view: VIEWS.HISTORY
+			});
+			this.createIconButton({
+				icon: "⚙️",
+				title: "Configuración",
+				view: VIEWS.SETTINGS
+			});
+			toolbar.appendChild(searchWrapper);
+			toolbar.appendChild(this.iconBar);
+			this.panelBody.appendChild(toolbar);
+			this.refreshAlertBadge();
+		}
+		createIconButton({ icon, title, view, badge = false }) {
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = "tw3b-icon-button";
+			button.title = title;
+			button.setAttribute("aria-label", title);
+			const iconElement = document.createElement("span");
+			iconElement.className = "tw3b-icon";
+			iconElement.textContent = icon;
+			button.appendChild(iconElement);
+			if (badge) {
+				const badgeElement = document.createElement("span");
+				badgeElement.className = "tw3b-icon-badge";
+				badgeElement.id = "tw3b-alert-count";
+				badgeElement.textContent = "0";
+				badgeElement.style.display = "none";
+				button.appendChild(badgeElement);
+			}
+			button.addEventListener("click", () => {
+				this.navigate(view);
+			});
+			this.iconBar.appendChild(button);
+			return button;
+		}
+		handleSearch(query) {
+			const searchModule = this.views.search;
+			if (!searchModule || typeof searchModule.onQuery !== "function") return;
+			searchModule.onQuery(query, this.ctx, async (item) => {
+				await this.selectSearchItem(item);
+			}, this.searchInput);
+		}
+		async selectSearchItem(item) {
+			if (!item) return;
+			this.hideSuggestions();
+			if (!this.ctx.scheduler) {
+				console.warn("[TornW3B] Scheduler todavía no está disponible.");
+				return;
+			}
+			this.showLoading(item.name);
+			try {
+				console.log(`[TornW3B] Auditoría prioritaria: ${item.name}`);
+				const result = await this.ctx.scheduler.getOrAudit(item);
+				if (!result) {
+					this.showError(item.name, "Este artículo no puede ser auditado por Torn.");
+					return;
+				}
+				await this.navigate(VIEWS.SALE, {
+					item,
+					audit: result
+				});
+			} catch (error) {
+				console.error(`[TornW3B] Error procesando ${item.name}:`, error);
+				this.showError(item.name, error?.message || "No se pudo auditar el artículo.");
+			}
+		}
+		showLoading(itemName) {
+			this.panelBody.innerHTML = `
+            <div class="tw3b-loading">
+
+                <div class="tw3b-card-title">
+                    ${escapeHtml$4(itemName)}
+                </div>
+
+                <div class="tw3b-skeleton"></div>
+
+                <div class="tw3b-loading-text">
+                    🔄 Analizando mercado...
+                </div>
+
+            </div>
+        `;
+		}
+		showError(itemName, message) {
+			this.panelBody.innerHTML = `
+
+            <div class="tw3b-error-view">
+
+                <div class="tw3b-card-title">
+                    ${escapeHtml$4(itemName)}
+                </div>
+
+                <div class="tw3b-error">
+                    ${escapeHtml$4(message)}
+                </div>
+
+                <button
+                    type="button"
+                    class="tw3b-button"
+                    data-action="back-menu"
+                >
+                    ← Volver
+                </button>
+
+            </div>
+
+        `;
+			const back = this.panelBody.querySelector("[data-action=\"back-menu\"]");
+			if (back) back.addEventListener("click", () => this.renderMenu());
 		}
 		async navigate(viewName, params = {}) {
 			if (this.activeViewInstance && typeof this.activeViewInstance.destroy === "function") this.activeViewInstance.destroy();
+			this.activeViewInstance = null;
 			this.currentView = viewName;
+			this.hideSuggestions();
 			this.panelBody.innerHTML = "";
 			if (viewName === VIEWS.MENU) {
 				this.renderMenu();
@@ -1086,88 +1398,51 @@
 			}
 			const view = this.views[viewName];
 			if (!view || typeof view.render !== "function") {
-				this.panelBody.innerHTML = `
-                <div class="tw3b-error">
-                    Vista "${viewName}" no disponible todavía.
-                </div>
-                <span class="tw3b-back" data-action="back">← Volver</span>
-            `;
-				this.bindBack();
+				this.showError("TornW3B", `Vista "${viewName}" no disponible.`);
 				return;
 			}
-			const back = document.createElement("span");
+			const back = document.createElement("button");
+			back.type = "button";
 			back.className = "tw3b-back";
-			back.textContent = "← Volver";
-			back.addEventListener("click", () => this.navigate(VIEWS.MENU));
+			back.innerHTML = "←";
+			back.title = "Volver";
+			back.setAttribute("aria-label", "Volver");
+			back.addEventListener("click", () => {
+				this.navigate(VIEWS.MENU);
+			});
 			this.panelBody.appendChild(back);
 			const container = document.createElement("div");
+			container.className = "tw3b-view-container";
 			this.panelBody.appendChild(container);
-			this.activeViewInstance = await view.render(container, this.ctx, (nextView, nextParams) => this.navigate(nextView, nextParams), params) || null;
+			this.activeViewInstance = await view.render(container, this.ctx, (nextView, nextParams) => {
+				this.navigate(nextView, nextParams);
+			}, params) || null;
 		}
-		bindBack() {
-			const back = this.panelBody.querySelector("[data-action=\"back\"]");
-			if (back) back.addEventListener("click", () => this.navigate(VIEWS.MENU));
-		}
-		renderMenu() {
-			const searchInput = document.createElement("input");
-			searchInput.className = "tw3b-search";
-			searchInput.type = "text";
-			searchInput.placeholder = "🔎 Buscar artículo...";
-			searchInput.addEventListener("input", (e) => {
-				const query = e.target.value;
-				if (this.views.search && this.views.search.onQuery) this.views.search.onQuery(query, this.ctx, (item) => {
-					this.navigate(VIEWS.SALE, { item });
-				}, searchInput);
-			});
-			this.panelBody.appendChild(searchInput);
-			const items = [
-				{
-					label: "Venta",
-					view: VIEWS.SALE
-				},
-				{
-					label: "Auditoría",
-					view: VIEWS.AUDIT,
-					badge: true
-				},
-				{
-					label: "Historial",
-					view: VIEWS.HISTORY
-				},
-				{
-					label: "Configuración",
-					view: VIEWS.SETTINGS
-				}
-			];
-			for (const item of items) {
-				const el = document.createElement("div");
-				el.className = "tw3b-menu-item";
-				const label = document.createElement("span");
-				label.textContent = item.label;
-				el.appendChild(label);
-				if (item.badge) {
-					const badge = document.createElement("span");
-					badge.className = "tw3b-badge tw3b-badge-red";
-					badge.id = "tw3b-alert-count";
-					badge.textContent = "0";
-					badge.style.display = "none";
-					el.appendChild(badge);
-				}
-				el.addEventListener("click", () => this.navigate(item.view));
-				this.panelBody.appendChild(el);
-			}
+		hideSuggestions() {
+			const suggestions = document.getElementById("tw3b-suggestions");
+			if (suggestions) suggestions.style.display = "none";
 		}
 		async refreshAlertBadge() {
-			const audits = await this.ctx.storage.getAllAudits();
-			const alertCount = Object.values(audits).filter((a) => a.status === "RED" || a.status === "YELLOW").length;
-			const badge = this.panelBody.querySelector("#tw3b-alert-count");
-			if (badge) {
-				badge.textContent = String(alertCount);
-				badge.style.display = alertCount > 0 ? "inline-block" : "none";
+			if (!this.ctx.storage) return;
+			try {
+				const audits = await this.ctx.storage.getAllAudits();
+				const alertCount = Object.values(audits).filter((audit) => audit && (audit.status === "RED" || audit.status === "YELLOW")).length;
+				const badge = this.panelBody.querySelector("#tw3b-alert-count");
+				if (badge) {
+					badge.textContent = String(alertCount);
+					badge.style.display = alertCount > 0 ? "flex" : "none";
+				}
+				if (this.fab) this.fab.classList.toggle("has-alerts", alertCount > 0);
+			} catch (error) {
+				console.warn("[TornW3B] No se pudo actualizar badge:", error);
 			}
-			this.fab.classList.toggle("has-alerts", alertCount > 0);
 		}
 	};
+	function escapeHtml$4(str) {
+		const div = document.createElement("div");
+		div.textContent = String(str ?? "");
+		return div.innerHTML;
+	}
 	//#endregion
 	//#region src/ui/search.js
 	var SUGGESTIONS_ID = "tw3b-suggestions";
@@ -1184,7 +1459,7 @@
 	}
 	function renderSuggestions(container, items, onSelect) {
 		container.innerHTML = "";
-		if (items.length === 0) {
+		if (!items.length) {
 			container.style.display = "none";
 			return;
 		}
@@ -1193,8 +1468,13 @@
 			const row = document.createElement("div");
 			row.className = "tw3b-suggestion-item";
 			row.innerHTML = `
-            <span class="tw3b-suggestion-name">${escapeHtml$3(item.name)}</span>
-            <span class="tw3b-suggestion-price">${formatMoney(item.buyPrice)}</span>
+            <span class="tw3b-suggestion-name">
+                ${escapeHtml$3(item.name)}
+            </span>
+
+            <span class="tw3b-suggestion-price">
+                ${formatMoney(item.buyPrice)}
+            </span>
         `;
 			row.addEventListener("click", () => {
 				container.style.display = "none";
@@ -1205,25 +1485,47 @@
 	}
 	function escapeHtml$3(str) {
 		const div = document.createElement("div");
-		div.textContent = str;
+		div.textContent = String(str ?? "");
 		return div.innerHTML;
 	}
 	var search = { onQuery(query, ctx, onSelect, anchorEl) {
 		clearTimeout(debounceHandle);
 		const container = getSuggestionsContainer(anchorEl);
-		if (!query || query.length < CONFIG.SEARCH_MIN_LENGTH) {
+		const normalizedQuery = String(query ?? "").trim();
+		if (normalizedQuery.length < CONFIG.SEARCH_MIN_LENGTH) {
+			container.innerHTML = "";
 			container.style.display = "none";
 			return;
 		}
+		if (!ctx?.pricelist || typeof ctx.pricelist.search !== "function") {
+			container.innerHTML = `
+                <div class="tw3b-card-sub">
+                    Cargando pricelist...
+                </div>
+            `;
+			container.style.display = "block";
+			return;
+		}
 		debounceHandle = setTimeout(async () => {
-			const results = await ctx.pricelist.search(query);
-			renderSuggestions(container, results.slice(0, 8), onSelect);
+			try {
+				if (!ctx?.pricelist || typeof ctx.pricelist.search !== "function") {
+					container.style.display = "none";
+					return;
+				}
+				const results = await ctx.pricelist.search(normalizedQuery);
+				renderSuggestions(container, results.slice(0, 8), onSelect);
+			} catch (error) {
+				console.error("[TornW3B] Error buscando artículo:", error);
+				container.innerHTML = "";
+				container.style.display = "none";
+			}
 		}, 200);
 	} };
 	//#endregion
 	//#region src/ui/saleView.js
 	var saleView = { async render(container, ctx, navigate, params = {}) {
 		const item = params.item;
+		const audit = params.audit;
 		if (!item) {
 			container.innerHTML = `
                 <div class="tw3b-error">
@@ -1232,11 +1534,6 @@
             `;
 			return null;
 		}
-		container.innerHTML = `
-            <div class="tw3b-skeleton"></div>
-            <div class="tw3b-skeleton"></div>
-        `;
-		const audit = await ctx.storage.getAudit(item.itemId);
 		if (!audit) {
 			container.innerHTML = `
                 <div class="tw3b-card-title">
@@ -1244,59 +1541,92 @@
                 </div>
 
                 <div class="tw3b-error">
-                    Este artículo todavía no fue auditado — no se puede
-                    calcular el % W3B sin el Item Value de Torn.
+                    No se recibió información de auditoría.
                 </div>
             `;
 			return null;
 		}
-		const w3bPercent = item.buyPrice / audit.itemValue;
-		const w3bDiscount = 1 - w3bPercent;
-		const sellDiscount = w3bDiscount / 2;
+		if (!Number.isFinite(Number(audit.itemValue)) || Number(audit.itemValue) <= 0) {
+			container.innerHTML = `
+                <div class="tw3b-card-title">
+                    ${escapeHtml$2(item.name)}
+                </div>
+
+                <div class="tw3b-error">
+                    Torn no devolvió un Item Value válido para este artículo.
+                </div>
+            `;
+			return null;
+		}
+		const itemValue = Number(audit.itemValue);
+		const w3bPercent = Number(item.buyPrice) / itemValue;
+		const discountPercent = 1 - w3bPercent;
+		const sellDiscount = discountPercent / 2;
 		const sellPercent = 1 - sellDiscount;
-		const sellPrice = audit.itemValue * sellPercent;
+		const sellPrice = itemValue * sellPercent;
 		container.innerHTML = `
+
             <div class="tw3b-card-title">
                 ${escapeHtml$2(item.name)}
             </div>
+
 
             <div class="tw3b-row">
                 <span class="tw3b-row-label">
                     W3B Buy Price
                 </span>
+
                 <span>
                     ${formatMoney(item.buyPrice)}
                 </span>
             </div>
 
+
+            <div class="tw3b-row">
+                <span class="tw3b-row-label">
+                    Item Value
+                </span>
+
+                <span>
+                    ${formatMoney(itemValue)}
+                </span>
+            </div>
+
+
             <div class="tw3b-row">
                 <span class="tw3b-row-label">
                     W3B %
                 </span>
+
                 <span>
                     ${formatPercent(w3bPercent)}
-                    (-${formatPercent(w3bDiscount)})
+                    (${formatPercent(-discountPercent)})
                 </span>
             </div>
+
 
             <div class="tw3b-row">
                 <span class="tw3b-row-label">
                     Sell %
                 </span>
+
                 <span>
                     ${formatPercent(sellPercent)}
-                    (-${formatPercent(sellDiscount)})
+                    (${formatPercent(-sellDiscount)})
                 </span>
             </div>
+
 
             <div class="tw3b-row">
                 <span class="tw3b-row-label">
                     Sell Price
                 </span>
+
                 <span>
                     ${formatMoney(sellPrice)}
                 </span>
             </div>
+
 
             <button
                 class="tw3b-button"
@@ -1307,7 +1637,7 @@
             </button>
         `;
 		const copyBtn = container.querySelector("#tw3b-copy-sell");
-		copyBtn.addEventListener("click", async () => {
+		if (copyBtn) copyBtn.addEventListener("click", async () => {
 			try {
 				await navigator.clipboard.writeText(String(Math.round(sellPrice)));
 				copyBtn.textContent = "Copiado ✓";
@@ -1322,7 +1652,7 @@
 	} };
 	function escapeHtml$2(str) {
 		const div = document.createElement("div");
-		div.textContent = str;
+		div.textContent = String(str ?? "");
 		return div.innerHTML;
 	}
 	//#endregion
@@ -1334,53 +1664,92 @@
 		},
 		async renderList(container, ctx, navigate) {
 			container.innerHTML = `
-            <input type="text" class="tw3b-search" id="tw3b-audit-filter"
-                placeholder="🔎 Filtrar por nombre...">
+            <input
+                type="text"
+                class="tw3b-search"
+                id="tw3b-audit-filter"
+                placeholder="🔎 Filtrar por nombre..."
+            >
+
             <div id="tw3b-audit-list">
+
                 <div class="tw3b-skeleton"></div>
                 <div class="tw3b-skeleton"></div>
+
             </div>
         `;
-			const audits = await ctx.storage.getAllAudits();
+			let audits;
+			try {
+				audits = await ctx.storage.getAllAudits();
+			} catch (error) {
+				console.error("[TornW3B] Error cargando auditorías:", error);
+				container.querySelector("#tw3b-audit-list").innerHTML = `
+                <div class="tw3b-error">
+                    No se pudieron cargar las auditorías.
+                </div>
+            `;
+				return null;
+			}
 			const order = {
 				RED: 0,
 				YELLOW: 1,
 				GREEN: 2
 			};
-			const list = Object.values(audits).sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3));
+			const list = Object.values(audits || {}).filter(Boolean).sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3));
 			const listEl = container.querySelector("#tw3b-audit-list");
 			const renderItems = (filterText = "") => {
-				const filtered = filterText ? list.filter((a) => a.itemName.toLowerCase().includes(filterText.toLowerCase())) : list;
+				const normalizedFilter = String(filterText).trim().toLowerCase();
+				const filtered = normalizedFilter ? list.filter((audit) => String(audit?.itemName || "").toLowerCase().includes(normalizedFilter)) : list;
 				if (filtered.length === 0) {
 					listEl.innerHTML = `
-                    <div class="tw3b-card-sub">
-                        No hay artículos auditados todavía.
-                    </div>
-                `;
+                        <div class="tw3b-card-sub">
+                            No hay artículos auditados todavía.
+                        </div>
+                    `;
 					return;
 				}
 				listEl.innerHTML = "";
 				for (const audit of filtered) {
 					const card = document.createElement("div");
 					card.className = "tw3b-card";
+					const confidence = Number(audit.confidence);
+					const confidenceText = Number.isFinite(confidence) ? `${confidence}%` : "-";
 					card.innerHTML = `
-                    <div class="tw3b-card-title">
-                        ${escapeHtml$1(audit.itemName)}
-                        <span class="${statusBadgeClass(audit.status)}">
-                            ${audit.status}
-                        </span>
-                    </div>
-                    <div class="tw3b-card-sub">
-                        ${formatMoney(audit.w3bBuyPrice)} → ${formatMoney(audit.correctBuyPrice)}
-                        · confianza ${audit.confidence}%
-                    </div>
-                `;
-					card.addEventListener("click", () => navigate("audit", { itemId: audit.itemId }));
+
+                        <div class="tw3b-card-title">
+
+                            ${escapeHtml$1(audit.itemName)}
+
+                            <span class="${statusBadgeClass(audit.status)}">
+                                ${escapeHtml$1(audit.status)}
+                            </span>
+
+                        </div>
+
+
+                        <div class="tw3b-card-sub">
+
+                            ${formatMoney(Number(audit.w3bBuyPrice))}
+
+                            →
+
+                            ${formatMoney(Number(audit.correctBuyPrice))}
+
+                            · confianza
+                            ${confidenceText}
+
+                        </div>
+                    `;
+					card.addEventListener("click", () => {
+						navigate("audit", { itemId: audit.itemId });
+					});
 					listEl.appendChild(card);
 				}
 			};
 			renderItems();
-			container.querySelector("#tw3b-audit-filter").addEventListener("input", (e) => renderItems(e.target.value));
+			container.querySelector("#tw3b-audit-filter").addEventListener("input", (event) => {
+				renderItems(event.target.value);
+			});
 			return null;
 		},
 		async renderDetail(container, ctx, navigate, itemId) {
@@ -1388,51 +1757,116 @@
             <div class="tw3b-skeleton"></div>
             <div class="tw3b-skeleton"></div>
         `;
-			const audit = await ctx.storage.getAudit(itemId);
-			if (!audit) {
+			let audit;
+			try {
+				audit = await ctx.storage.getAudit(itemId);
+			} catch (error) {
+				console.error("[TornW3B] Error obteniendo auditoría:", error);
 				container.innerHTML = `
                 <div class="tw3b-error">
-                    No hay datos de auditoría para este artículo.
+                    No se pudo cargar la auditoría.
                 </div>
             `;
 				return null;
 			}
+			if (!audit) {
+				container.innerHTML = `
+                <div class="tw3b-error">
+                    No hay datos de auditoría
+                    para este artículo.
+                </div>
+            `;
+				return null;
+			}
+			const confidence = Number(audit.confidence);
+			const confidenceText = Number.isFinite(confidence) ? `${confidence}%` : "-";
 			container.innerHTML = `
-            <div class="tw3b-card-title">${escapeHtml$1(audit.itemName)}</div>
 
-            ${row("Item Value", formatMoney(audit.itemValue))}
-            ${row("W3B Buy", formatMoney(audit.w3bBuyPrice))}
-            ${row("Observed W3B", formatPercent(audit.observedRatio))}
-            ${row("Learned W3B", formatPercent(audit.learnedRatio))}
-            ${row("Market Units", audit.totalMarketQuantity)}
-            ${row("Sample", audit.sampleQuantity)}
-            ${row("Weighted Mean", formatMoney(audit.weightedMean))}
-            ${row("Weighted Median", formatMoney(audit.weightedMedian))}
-            ${row("Real Market Value", formatMoney(audit.realMarketValue))}
-            ${row("Correct Buy", formatMoney(audit.correctBuyPrice))}
-            ${row("Difference", formatPercent(audit.differencePercent))}
-            ${row("Confidence", audit.confidence + "%")}
-            ${row("Status", `<span class="${statusBadgeClass(audit.status)}">${audit.status}</span>`)}
+            <div class="tw3b-card-title">
+                ${escapeHtml$1(audit.itemName)}
+            </div>
 
-            <button class="tw3b-button" id="tw3b-view-history" style="margin-top: 10px;">
+
+            ${row("Item Value", formatMoney(Number(audit.itemValue)))}
+
+
+            ${row("W3B Buy", formatMoney(Number(audit.w3bBuyPrice)))}
+
+
+            ${row("Observed W3B", formatPercent(Number(audit.observedRatio)))}
+
+
+            ${row("Learned W3B", formatPercent(Number(audit.learnedRatio)))}
+
+
+            ${row("Market Units", formatNumber(audit.totalMarketQuantity))}
+
+
+            ${row("Sample", formatNumber(audit.sampleQuantity))}
+
+
+            ${row("Weighted Mean", formatMoney(Number(audit.weightedMean)))}
+
+
+            ${row("Weighted Median", formatMoney(Number(audit.weightedMedian)))}
+
+
+            ${row("Real Market Value", formatMoney(Number(audit.realMarketValue)))}
+
+
+            ${row("Correct Buy", formatMoney(Number(audit.correctBuyPrice)))}
+
+
+            ${row("Difference", formatPercent(Number(audit.differencePercent)))}
+
+
+            ${row("Confidence", confidenceText)}
+
+
+            ${row("Status", `
+                    <span class="${statusBadgeClass(audit.status)}">
+                        ${escapeHtml$1(audit.status)}
+                    </span>
+                `)}
+
+
+            <button
+                class="tw3b-button"
+                id="tw3b-view-history"
+                style="margin-top: 10px;"
+            >
                 Ver historial
             </button>
         `;
-			container.querySelector("#tw3b-view-history").addEventListener("click", () => navigate("history", { itemId: audit.itemId }));
+			container.querySelector("#tw3b-view-history").addEventListener("click", () => {
+				navigate("history", { itemId: audit.itemId });
+			});
 			return null;
 		}
 	};
 	function row(label, value) {
 		return `
         <div class="tw3b-row">
-            <span class="tw3b-row-label">${label}</span>
-            <span>${value}</span>
+
+            <span class="tw3b-row-label">
+                ${escapeHtml$1(label)}
+            </span>
+
+            <span>
+                ${value}
+            </span>
+
         </div>
     `;
 	}
+	function formatNumber(value) {
+		const number = Number(value);
+		if (!Number.isFinite(number)) return "-";
+		return number.toLocaleString("en-US");
+	}
 	function escapeHtml$1(str) {
 		const div = document.createElement("div");
-		div.textContent = str;
+		div.textContent = String(str ?? "");
 		return div.innerHTML;
 	}
 	//#endregion
@@ -1443,9 +1877,22 @@
 			return this.renderRecent(container, ctx, navigate);
 		},
 		async renderRecent(container, ctx, navigate) {
-			container.innerHTML = `<div class="tw3b-skeleton"></div>`;
-			const recent = await ctx.history.getRecentlyUpdated(10);
-			if (recent.length === 0) {
+			container.innerHTML = `
+            <div class="tw3b-skeleton"></div>
+        `;
+			let recent;
+			try {
+				recent = await ctx.history.getRecentlyUpdated(10);
+			} catch (error) {
+				console.error("[TornW3B] Error cargando historial reciente:", error);
+				container.innerHTML = `
+                <div class="tw3b-error">
+                    No se pudo cargar el historial.
+                </div>
+            `;
+				return null;
+			}
+			if (!Array.isArray(recent) || recent.length === 0) {
 				container.innerHTML = `
                 <div class="tw3b-card-sub">
                     Todavía no hay historial registrado.
@@ -1453,34 +1900,68 @@
             `;
 				return null;
 			}
-			const audits = await ctx.storage.getAllAudits();
+			let audits = {};
+			try {
+				audits = await ctx.storage.getAllAudits();
+			} catch (error) {
+				console.warn("[TornW3B] No se pudieron cargar las auditorías:", error);
+			}
 			container.innerHTML = "";
 			for (const entry of recent) {
-				const audit = audits[entry.itemId];
+				if (!entry) continue;
+				const itemId = Number(entry.itemId);
+				const itemName = (audits?.[entry.itemId] || audits?.[itemId])?.itemName || `Item ${itemId}`;
+				const timestamp = Number(entry.lastHistoryUpdate);
+				const dateText = Number.isFinite(timestamp) ? new Date(timestamp).toLocaleDateString() : "-";
 				const card = document.createElement("div");
 				card.className = "tw3b-card";
 				card.innerHTML = `
+
                 <div class="tw3b-card-title">
-                    ${escapeHtml(audit?.itemName ?? `Item ${entry.itemId}`)}
+                    ${escapeHtml(itemName)}
                 </div>
+
+
                 <div class="tw3b-card-sub">
                     Última actualización:
-                    ${new Date(entry.lastHistoryUpdate).toLocaleDateString()}
+                    ${escapeHtml(dateText)}
                 </div>
+
             `;
-				card.addEventListener("click", () => navigate("history", { itemId: entry.itemId }));
+				card.addEventListener("click", () => {
+					navigate("history", { itemId });
+				});
 				container.appendChild(card);
 			}
 			return null;
 		},
 		async renderDetail(container, ctx, navigate, itemId) {
 			container.innerHTML = `
+
             <div class="tw3b-skeleton"></div>
             <div class="tw3b-skeleton"></div>
+
         `;
-			const [summary, series] = await Promise.all([ctx.history.getSummary(itemId), ctx.history.getSeries(itemId)]);
-			const audit = await ctx.storage.getAudit(itemId);
-			if (series.length === 0) {
+			let summary;
+			let series;
+			let audit;
+			try {
+				[summary, series, audit] = await Promise.all([
+					ctx.history.getSummary(itemId),
+					ctx.history.getSeries(itemId),
+					ctx.storage.getAudit(itemId)
+				]);
+			} catch (error) {
+				console.error("[TornW3B] Error cargando detalle del historial:", error);
+				container.innerHTML = `
+                <div class="tw3b-error">
+                    No se pudo cargar el historial
+                    de este artículo.
+                </div>
+            `;
+				return null;
+			}
+			if (!Array.isArray(series) || series.length === 0) {
 				container.innerHTML = `
                 <div class="tw3b-card-sub">
                     No hay historial para este artículo todavía.
@@ -1489,52 +1970,102 @@
 				return null;
 			}
 			container.innerHTML = `
+
             <div class="tw3b-card-title">
-                ${escapeHtml(audit?.itemName ?? `Item ${itemId}`)}
+                ${escapeHtml(audit?.itemName || `Item ${itemId}`)}
             </div>
 
-            ${summaryRow("Ayer", summary.yesterday)}
-            ${summaryRow("Últimos 7 días", summary.last7d)}
-            ${summaryRow("Últimos 30 días", summary.last30d)}
-            ${summaryRow("Últimos 6 meses", summary.last6m)}
 
-            <div class="tw3b-card-sub" style="margin-top: 10px;">
+            ${summaryRow("Ayer", summary?.yesterday)}
+
+
+            ${summaryRow("Últimos 7 días", summary?.last7d)}
+
+
+            ${summaryRow("Últimos 30 días", summary?.last30d)}
+
+
+            ${summaryRow("Últimos 6 meses", summary?.last6m)}
+
+
+            <div
+                class="tw3b-card-sub"
+                style="margin-top: 10px;"
+            >
                 Evolución (Real Market Value)
             </div>
+
+
             <div id="tw3b-history-series"></div>
+
         `;
 			const seriesEl = container.querySelector("#tw3b-history-series");
-			for (const point of series.slice(-15)) {
-				const r = document.createElement("div");
-				r.className = "tw3b-row";
-				r.innerHTML = `
+			const visibleSeries = series.slice(-15);
+			for (const point of visibleSeries) {
+				if (!point) continue;
+				const timestamp = Number(point.timestamp);
+				const dateText = Number.isFinite(timestamp) ? new Date(timestamp).toLocaleDateString() : "-";
+				const row = document.createElement("div");
+				row.className = "tw3b-row";
+				row.innerHTML = `
+
                 <span class="tw3b-row-label">
-                    ${new Date(point.timestamp).toLocaleDateString()}
+                    ${escapeHtml(dateText)}
                 </span>
-                <span>${formatMoney(point.realMarketValue)}</span>
+
+
+                <span>
+                    ${formatMoney(Number(point.realMarketValue))}
+                </span>
+
             `;
-				seriesEl.appendChild(r);
+				seriesEl.appendChild(row);
 			}
 			return null;
 		}
 	};
 	function summaryRow(label, data) {
 		if (!data) return `
+
             <div class="tw3b-row">
-                <span class="tw3b-row-label">${label}</span>
-                <span class="tw3b-card-sub">Sin datos</span>
+
+                <span class="tw3b-row-label">
+                    ${escapeHtml(label)}
+                </span>
+
+                <span class="tw3b-card-sub">
+                    Sin datos
+                </span>
+
             </div>
+
         `;
+		const samples = Number(data.samples);
+		const samplesText = Number.isFinite(samples) ? samples : 0;
 		return `
+
         <div class="tw3b-row">
-            <span class="tw3b-row-label">${label}</span>
-            <span>${formatMoney(data.avgRealMarketValue)} · ${data.samples} muestras</span>
+
+            <span class="tw3b-row-label">
+                ${escapeHtml(label)}
+            </span>
+
+            <span>
+                ${formatMoney(Number(data.avgRealMarketValue))}
+
+                ·
+
+                ${samplesText}
+                muestras
+            </span>
+
         </div>
+
     `;
 	}
 	function escapeHtml(str) {
 		const div = document.createElement("div");
-		div.textContent = str;
+		div.textContent = String(str ?? "");
 		return div.innerHTML;
 	}
 	//#endregion
@@ -1634,13 +2165,13 @@
 			history,
 			concurrency: 1
 		});
-		console.log("[TornW3B] Sistema iniciado");
+		console.log("[TornW3B] Dependencias inicializadas");
 		try {
 			const pricelistItems = await pricelist.sync(config.w3bUserId);
 			console.log(`[TornW3B] Pricelist sincronizada: ${pricelistItems.items.length} items`);
 		} catch (error) {
 			console.error("[TornW3B] Error sincronizando pricelist:", error);
-			console.warn("[TornW3B] Se usará la pricelist cacheada (si existe).");
+			console.warn("[TornW3B] Se utilizará la pricelist cacheada (si existe).");
 		}
 		await history.init();
 		await scheduler.init();
@@ -1651,7 +2182,6 @@
 		scheduler.onAuditError = (item, error) => {
 			console.error(`[TornW3B] Error auditando ${item.name}:`, error);
 		};
-		scheduler.start();
 		Object.assign(app.ctx, {
 			tornAPI,
 			w3bAPI,
@@ -1662,6 +2192,8 @@
 			history,
 			scheduler
 		});
+		scheduler.start();
+		await app.refreshAlertBadge();
 		window.TornW3B = {
 			tornAPI,
 			w3bAPI,
@@ -1674,6 +2206,7 @@
 			scheduler,
 			app
 		};
+		console.log("[TornW3B] Sistema iniciado correctamente");
 	}
 	function buildApp(storage, config) {
 		return new App({
@@ -1687,6 +2220,8 @@
 			settings: settingsView
 		});
 	}
-	start();
+	start().catch((error) => {
+		console.error("[TornW3B] Error fatal al iniciar:", error);
+	});
 	//#endregion
 })();
