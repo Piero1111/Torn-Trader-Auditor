@@ -301,7 +301,12 @@
 		}
 		async sync(userId) {
 			const raw = await this.w3bAPI.getPricelist(userId);
+			console.log("[TornW3B] W3B raw:", raw);
+			console.log(`[TornW3B] W3B devolvió ${Array.isArray(raw) ? raw.length : 0} items`);
 			const items = this.normalize(raw);
+			console.log(`[TornW3B] Después de normalizar: ${items.length} items`);
+			const discarded = (Array.isArray(raw) ? raw.length : 0) - items.length;
+			console.log(`[TornW3B] Descartados: ${discarded}`);
 			return this.storage.savePricelist(items);
 		}
 		normalize(rawItems) {
@@ -804,40 +809,43 @@
 		async getTornDay() {
 			const response = await this.tornAPI.getTimestamp();
 			const timestamp = Number(response?.timestamp);
-			const validTimestamp = Number.isFinite(timestamp) ? timestamp : Math.floor(Date.now() / 1e3);
-			return Math.floor(validTimestamp / 86400);
+			if (!Number.isFinite(timestamp) || timestamp <= 0) return Math.floor(Date.now() / 864e5);
+			return Math.floor(timestamp / 86400);
 		}
 		async init() {
-			const history = await this.storage.getAllHistory();
-			this.lastDayByItem.clear();
-			for (const [itemId, snapshots] of Object.entries(history)) {
-				if (!Array.isArray(snapshots) || snapshots.length === 0) continue;
-				const last = snapshots[snapshots.length - 1];
-				if (!last || !Number.isFinite(Number(last.timestamp))) continue;
-				const day = Math.floor(Number(last.timestamp) / 864e5);
-				this.lastDayByItem.set(Number(itemId), day);
+			const audits = await this.storage.getAllAudits();
+			for (const itemId in audits) {
+				const numericItemId = Number(itemId);
+				if (!Number.isFinite(numericItemId)) continue;
+				const history = await this.storage.getHistory(numericItemId);
+				if (!Array.isArray(history) || history.length === 0) continue;
+				const last = history[history.length - 1];
+				if (!last) continue;
+				const timestamp = Number(last.timestamp);
+				if (!Number.isFinite(timestamp) || timestamp <= 0) continue;
+				const day = Math.floor(timestamp / 864e5);
+				this.lastDayByItem.set(numericItemId, day);
 			}
 			this.initialized = true;
+			console.log(`[History] Inicializado: ${this.lastDayByItem.size} artículos con historial.`);
 		}
 		async recordSnapshot(audit) {
-			if (!audit || !Number.isFinite(Number(audit.itemId))) return null;
-			if (!this.initialized) await this.init();
+			if (!audit) return null;
 			const itemId = Number(audit.itemId);
+			if (!Number.isFinite(itemId) || itemId <= 0) return null;
 			const tornDay = await this.getTornDay();
-			if (this.lastDayByItem.get(itemId) === tornDay) return null;
-			const snapshot = {
-				...audit,
-				timestamp: Number.isFinite(Number(audit.timestamp)) ? Number(audit.timestamp) : Date.now()
-			};
-			await this.storage.saveHistory(snapshot);
-			this.lastDayByItem.set(itemId, tornDay);
-			return snapshot;
+			const auditDay = Math.floor(Number(audit.timestamp) / 864e5);
+			const lastDay = this.lastDayByItem.get(itemId);
+			if (lastDay === auditDay || lastDay === tornDay) return null;
+			await this.storage.saveHistory(audit);
+			this.lastDayByItem.set(itemId, auditDay);
+			return audit;
 		}
 		async getSeries(itemId) {
-			return (await this.storage.getHistory(Number(itemId))).filter((snapshot) => snapshot && Number.isFinite(Number(snapshot.timestamp))).map((snapshot) => ({
-				timestamp: Number(snapshot.timestamp),
-				realMarketValue: Number(snapshot.realMarketValue),
-				correctBuyPrice: Number(snapshot.correctBuyPrice)
+			return (await this.storage.getHistory(Number(itemId))).map((snapshot) => ({
+				timestamp: snapshot.timestamp,
+				realMarketValue: snapshot.realMarketValue,
+				correctBuyPrice: snapshot.correctBuyPrice
 			}));
 		}
 		async getSummary(itemId) {
@@ -851,9 +859,10 @@
 				last6m: []
 			};
 			for (const snapshot of history) {
-				if (!snapshot || !Number.isFinite(Number(snapshot.timestamp))) continue;
-				const age = now - Number(snapshot.timestamp);
-				if (age > day && age <= 2 * day) buckets.yesterday.push(snapshot);
+				const timestamp = Number(snapshot.timestamp);
+				if (!Number.isFinite(timestamp)) continue;
+				const age = now - timestamp;
+				if (age >= 0 && age <= day) buckets.yesterday.push(snapshot);
 				if (age >= 0 && age <= 7 * day) buckets.last7d.push(snapshot);
 				if (age >= 0 && age <= 30 * day) buckets.last30d.push(snapshot);
 				if (age >= 0 && age <= 180 * day) buckets.last6m.push(snapshot);
@@ -866,20 +875,17 @@
 			};
 		}
 		aggregate(snapshots) {
-			if (!Array.isArray(snapshots) || snapshots.length === 0) return null;
+			if (!snapshots || snapshots.length === 0) return null;
 			const count = snapshots.length;
-			const sum = (key) => snapshots.reduce((total, snapshot) => {
-				const value = Number(snapshot?.[key]);
-				return total + (Number.isFinite(value) ? value : 0);
-			}, 0);
-			const latest = snapshots.filter((snapshot) => Number.isFinite(Number(snapshot?.timestamp))).sort((a, b) => Number(a.timestamp) - Number(b.timestamp)).at(-1);
+			const sum = (key) => snapshots.reduce((total, snapshot) => total + (Number(snapshot[key]) || 0), 0);
+			const latest = snapshots[snapshots.length - 1];
 			return {
 				avgRealMarketValue: sum("realMarketValue") / count,
 				avgCorrectBuyPrice: sum("correctBuyPrice") / count,
 				avgLearnedRatio: sum("learnedRatio") / count,
-				latestW3bBuyPrice: latest?.w3bBuyPrice ?? null,
-				latestConfidence: latest?.confidence ?? null,
-				latestStatus: latest?.status ?? null,
+				latestW3bBuyPrice: latest.w3bBuyPrice,
+				latestConfidence: latest.confidence,
+				latestStatus: latest.status,
 				samples: count
 			};
 		}
@@ -895,6 +901,7 @@
 		const style = document.createElement("style");
 		style.id = STYLE_ID;
 		style.textContent = `
+
         :root {
             --tw3b-bg: #14161c;
             --tw3b-surface: #1c1f28;
@@ -905,276 +912,980 @@
 
             --tw3b-green: #2fbf71;
             --tw3b-green-bg: rgba(47, 191, 113, 0.12);
+
             --tw3b-yellow: #e0b23e;
             --tw3b-yellow-bg: rgba(224, 178, 62, 0.12);
+
             --tw3b-red: #e0473e;
             --tw3b-red-bg: rgba(224, 71, 62, 0.12);
 
             --tw3b-accent: #4f8cff;
+
             --tw3b-radius: 10px;
             --tw3b-radius-sm: 6px;
 
-            --tw3b-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+            --tw3b-shadow:
+                0 8px 24px rgba(0, 0, 0, 0.35);
         }
 
+
+        /* =====================================================
+         * FAB
+         * ===================================================== */
+
         .tw3b-fab {
+
             position: fixed;
-            bottom: 20px;
+
+            /*
+             * La posición real será establecida
+             * por App mediante left/top.
+             *
+             * Estas variables solamente sirven
+             * como posición inicial.
+             */
+            left: auto;
+            top: auto;
+
             right: 20px;
+            bottom: 20px;
+
             width: 52px;
             height: 52px;
+
             border-radius: 50%;
-            background: var(--tw3b-accent);
+
+            background:
+                var(--tw3b-accent);
+
             color: #fff;
+
             display: flex;
             align-items: center;
             justify-content: center;
+
             font-size: 22px;
+
             border: none;
-            cursor: pointer;
-            box-shadow: var(--tw3b-shadow);
+
+            cursor: grab;
+
+            box-shadow:
+                var(--tw3b-shadow);
+
             z-index: 99998;
-            transition: transform 0.15s ease, box-shadow 0.15s ease;
+
+            transition:
+                transform 0.15s ease,
+                box-shadow 0.15s ease;
         }
+
+
+        .tw3b-fab:active {
+            cursor: grabbing;
+        }
+
 
         .tw3b-fab:hover {
             transform: scale(1.06);
         }
 
+
+        /*
+         * Cuando App está moviendo el botón,
+         * evitamos animaciones que puedan
+         * interferir con el movimiento.
+         */
+        .tw3b-fab.tw3b-dragging {
+            cursor: grabbing;
+            transition: none;
+            transform: none;
+        }
+
+
         .tw3b-fab.has-alerts::after {
+
             content: "";
+
             position: absolute;
+
             top: 4px;
             right: 4px;
+
             width: 10px;
             height: 10px;
+
             border-radius: 50%;
-            background: var(--tw3b-red);
-            border: 2px solid var(--tw3b-bg);
+
+            background:
+                var(--tw3b-red);
+
+            border:
+                2px solid var(--tw3b-bg);
         }
+
+
+        /* =====================================================
+         * PANEL
+         * ===================================================== */
 
         .tw3b-panel {
+
             position: fixed;
-            bottom: 84px;
-            right: 20px;
+
+            /*
+             * App establece left/top dinámicamente
+             * para que el panel permanezca junto
+             * al botón flotante.
+             */
+            left: auto;
+            top: auto;
+
             width: 340px;
+
             max-height: 70vh;
-            background: var(--tw3b-surface);
-            border: 1px solid var(--tw3b-border);
-            border-radius: var(--tw3b-radius);
-            box-shadow: var(--tw3b-shadow);
-            color: var(--tw3b-text);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            font-size: 13px;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            z-index: 99999;
-            opacity: 0;
-            transform: translateY(8px);
-            transition: opacity 0.15s ease, transform 0.15s ease;
-            pointer-events: none;
+
+            background:
+                var(--tw3b-surface);
+
+            border:
+                1px solid var(--tw3b-border);
+
+            border-radius:
+                var(--tw3b-radius);
+
+            box-shadow:
+                var(--tw3b-shadow);
+
+            color:
+                var(--tw3b-text);
+
+            font-family:
+                -apple-system,
+                BlinkMacSystemFont,
+                "Segoe UI",
+                Roboto,
+                sans-serif;
+
+            font-size:
+                13px;
+
+            display:
+                flex;
+
+            flex-direction:
+                column;
+
+            overflow:
+                hidden;
+
+            z-index:
+                99999;
+
+            opacity:
+                0;
+
+            transform:
+                translateY(8px);
+
+            transition:
+                opacity 0.15s ease,
+                transform 0.15s ease;
+
+            pointer-events:
+                none;
         }
+
 
         .tw3b-panel.open {
-            opacity: 1;
-            transform: translateY(0);
-            pointer-events: auto;
+
+            opacity:
+                1;
+
+            transform:
+                translateY(0);
+
+            pointer-events:
+                auto;
         }
+
+
+        /*
+         * Evita que el panel se salga de la
+         * pantalla cuando el FAB está cerca
+         * de un borde.
+         */
+        .tw3b-panel.tw3b-panel-left {
+            transform-origin: right center;
+        }
+
+
+        .tw3b-panel.tw3b-panel-right {
+            transform-origin: left center;
+        }
+
+
+        .tw3b-panel.tw3b-panel-top {
+            transform-origin: center bottom;
+        }
+
+
+        .tw3b-panel.tw3b-panel-bottom {
+            transform-origin: center top;
+        }
+
+
+        /* =====================================================
+         * HEADER
+         * ===================================================== */
 
         .tw3b-panel-header {
-            padding: 14px 16px;
-            border-bottom: 1px solid var(--tw3b-border);
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
+
+            padding:
+                14px 16px;
+
+            border-bottom:
+                1px solid var(--tw3b-border);
+
+            font-weight:
+                600;
+
+            display:
+                flex;
+
+            align-items:
+                center;
+
+            justify-content:
+                space-between;
         }
+
+
+        /* =====================================================
+         * BODY
+         * ===================================================== */
 
         .tw3b-panel-body {
-            overflow-y: auto;
-            padding: 12px;
-            flex: 1;
+
+            overflow-y:
+                auto;
+
+            overflow-x:
+                hidden;
+
+            padding:
+                12px;
+
+            flex:
+                1;
         }
+
+
+        /* =====================================================
+         * SEARCH
+         * ===================================================== */
 
         .tw3b-search {
-            width: 100%;
-            box-sizing: border-box;
-            background: var(--tw3b-bg);
-            border: 1px solid var(--tw3b-border);
-            border-radius: var(--tw3b-radius-sm);
-            color: var(--tw3b-text);
-            padding: 8px 10px;
-            font-size: 13px;
-            margin-bottom: 10px;
+
+            width:
+                100%;
+
+            box-sizing:
+                border-box;
+
+            background:
+                var(--tw3b-bg);
+
+            border:
+                1px solid var(--tw3b-border);
+
+            border-radius:
+                var(--tw3b-radius-sm);
+
+            color:
+                var(--tw3b-text);
+
+            padding:
+                8px 10px;
+
+            font-size:
+                13px;
+
+            margin-bottom:
+                10px;
         }
+
 
         .tw3b-search:focus {
-            outline: none;
-            border-color: var(--tw3b-accent);
+
+            outline:
+                none;
+
+            border-color:
+                var(--tw3b-accent);
         }
-            .tw3b-suggestions {
-            position: absolute;
-            width: 100%;
-            max-height: 200px;
-            overflow-y: auto;
-            background: var(--tw3b-surface);
-            border: 1px solid var(--tw3b-border);
-            border-radius: var(--tw3b-radius-sm);
-            margin-top: -8px;
-            margin-bottom: 10px;
-            z-index: 1;
+
+
+        /* =====================================================
+         * SEARCH SUGGESTIONS
+         * ===================================================== */
+
+        .tw3b-search-wrapper {
+
+            position:
+                relative;
+
+            width:
+                100%;
         }
+
+
+        .tw3b-suggestions {
+
+            position:
+                absolute;
+
+            top:
+                calc(100% - 10px);
+
+            left:
+                0;
+
+            width:
+                100%;
+
+            max-height:
+                200px;
+
+            overflow-y:
+                auto;
+
+            background:
+                var(--tw3b-surface);
+
+            border:
+                1px solid var(--tw3b-border);
+
+            border-radius:
+                var(--tw3b-radius-sm);
+
+            z-index:
+                100000;
+        }
+
 
         .tw3b-suggestion-item {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 10px;
-            cursor: pointer;
-            font-size: 12px;
+
+            display:
+                flex;
+
+            justify-content:
+                space-between;
+
+            align-items:
+                center;
+
+            gap:
+                10px;
+
+            padding:
+                8px 10px;
+
+            cursor:
+                pointer;
+
+            font-size:
+                12px;
         }
+
 
         .tw3b-suggestion-item:hover {
-            background: var(--tw3b-surface-hover);
+
+            background:
+                var(--tw3b-surface-hover);
         }
+
+
+        .tw3b-suggestion-name {
+
+            overflow:
+                hidden;
+
+            text-overflow:
+                ellipsis;
+
+            white-space:
+                nowrap;
+        }
+
+
+        .tw3b-suggestion-price {
+
+            flex-shrink:
+                0;
+
+            color:
+                var(--tw3b-text-muted);
+        }
+
+
+        /* =====================================================
+         * ICON BAR
+         * ===================================================== */
+
+        .tw3b-toolbar {
+
+            display:
+                flex;
+
+            flex-direction:
+                column;
+
+            gap:
+                8px;
+        }
+
+
+        .tw3b-icon-bar {
+
+            display:
+                flex;
+
+            align-items:
+                center;
+
+            justify-content:
+                center;
+
+            gap:
+                8px;
+        }
+
+
+        .tw3b-icon-button {
+
+            position:
+                relative;
+
+            width:
+                40px;
+
+            height:
+                36px;
+
+            border:
+                1px solid var(--tw3b-border);
+
+            border-radius:
+                var(--tw3b-radius-sm);
+
+            background:
+                var(--tw3b-bg);
+
+            color:
+                var(--tw3b-text);
+
+            cursor:
+                pointer;
+
+            display:
+                flex;
+
+            align-items:
+                center;
+
+            justify-content:
+                center;
+        }
+
+
+        .tw3b-icon-button:hover {
+
+            background:
+                var(--tw3b-surface-hover);
+
+            border-color:
+                var(--tw3b-accent);
+        }
+
+
+        .tw3b-icon {
+
+            font-size:
+                17px;
+        }
+
+
+        .tw3b-icon-badge {
+
+            position:
+                absolute;
+
+            top:
+                -5px;
+
+            right:
+                -5px;
+
+            min-width:
+                16px;
+
+            height:
+                16px;
+
+            padding:
+                0 4px;
+
+            box-sizing:
+                border-box;
+
+            border-radius:
+                999px;
+
+            background:
+                var(--tw3b-red);
+
+            color:
+                #fff;
+
+            font-size:
+                9px;
+
+            font-weight:
+                700;
+
+            display:
+                flex;
+
+            align-items:
+                center;
+
+            justify-content:
+                center;
+
+            border:
+                2px solid var(--tw3b-surface);
+        }
+
+
+        /* =====================================================
+         * MENU
+         * ===================================================== */
 
         .tw3b-menu-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 10px 12px;
-            border-radius: var(--tw3b-radius-sm);
-            cursor: pointer;
-            margin-bottom: 6px;
-            background: var(--tw3b-bg);
-            border: 1px solid transparent;
-            transition: background 0.12s ease, border-color 0.12s ease;
+
+            display:
+                flex;
+
+            align-items:
+                center;
+
+            justify-content:
+                space-between;
+
+            padding:
+                10px 12px;
+
+            border-radius:
+                var(--tw3b-radius-sm);
+
+            cursor:
+                pointer;
+
+            margin-bottom:
+                6px;
+
+            background:
+                var(--tw3b-bg);
+
+            border:
+                1px solid transparent;
+
+            transition:
+                background 0.12s ease,
+                border-color 0.12s ease;
         }
+
 
         .tw3b-menu-item:hover {
-            background: var(--tw3b-surface-hover);
-            border-color: var(--tw3b-border);
+
+            background:
+                var(--tw3b-surface-hover);
+
+            border-color:
+                var(--tw3b-border);
         }
+
+
+        /* =====================================================
+         * BADGES
+         * ===================================================== */
 
         .tw3b-badge {
-            font-size: 11px;
-            font-weight: 700;
-            padding: 2px 7px;
-            border-radius: 999px;
+
+            display:
+                inline-flex;
+
+            align-items:
+                center;
+
+            justify-content:
+                center;
+
+            font-size:
+                11px;
+
+            font-weight:
+                700;
+
+            padding:
+                2px 7px;
+
+            border-radius:
+                999px;
+
+            white-space:
+                nowrap;
         }
+
 
         .tw3b-badge-red {
-            background: var(--tw3b-red-bg);
-            color: var(--tw3b-red);
+
+            background:
+                var(--tw3b-red-bg);
+
+            color:
+                var(--tw3b-red);
         }
+
 
         .tw3b-badge-yellow {
-            background: var(--tw3b-yellow-bg);
-            color: var(--tw3b-yellow);
+
+            background:
+                var(--tw3b-yellow-bg);
+
+            color:
+                var(--tw3b-yellow);
         }
+
 
         .tw3b-badge-green {
-            background: var(--tw3b-green-bg);
-            color: var(--tw3b-green);
+
+            background:
+                var(--tw3b-green-bg);
+
+            color:
+                var(--tw3b-green);
         }
+
+
+        /* =====================================================
+         * CARDS
+         * ===================================================== */
 
         .tw3b-card {
-            background: var(--tw3b-bg);
-            border: 1px solid var(--tw3b-border);
-            border-radius: var(--tw3b-radius-sm);
-            padding: 10px 12px;
-            margin-bottom: 8px;
-            cursor: pointer;
-            transition: border-color 0.12s ease;
+
+            background:
+                var(--tw3b-bg);
+
+            border:
+                1px solid var(--tw3b-border);
+
+            border-radius:
+                var(--tw3b-radius-sm);
+
+            padding:
+                10px 12px;
+
+            margin-bottom:
+                8px;
+
+            cursor:
+                pointer;
+
+            transition:
+                border-color 0.12s ease,
+                background 0.12s ease;
         }
+
 
         .tw3b-card:hover {
-            border-color: var(--tw3b-accent);
+
+            border-color:
+                var(--tw3b-accent);
+
+            background:
+                var(--tw3b-surface-hover);
         }
+
 
         .tw3b-card-title {
-            font-weight: 600;
-            margin-bottom: 4px;
+
+            font-weight:
+                600;
+
+            margin-bottom:
+                4px;
+
+            display:
+                flex;
+
+            align-items:
+                center;
+
+            justify-content:
+                space-between;
+
+            gap:
+                8px;
         }
+
 
         .tw3b-card-sub {
-            color: var(--tw3b-text-muted);
-            font-size: 12px;
+
+            color:
+                var(--tw3b-text-muted);
+
+            font-size:
+                12px;
         }
+
+
+        /* =====================================================
+         * ROWS
+         * ===================================================== */
 
         .tw3b-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 6px 0;
-            border-bottom: 1px solid var(--tw3b-border);
-            font-size: 12px;
+
+            display:
+                flex;
+
+            justify-content:
+                space-between;
+
+            align-items:
+                center;
+
+            gap:
+                10px;
+
+            padding:
+                6px 0;
+
+            border-bottom:
+                1px solid var(--tw3b-border);
+
+            font-size:
+                12px;
         }
+
 
         .tw3b-row:last-child {
-            border-bottom: none;
+
+            border-bottom:
+                none;
         }
+
 
         .tw3b-row-label {
-            color: var(--tw3b-text-muted);
+
+            color:
+                var(--tw3b-text-muted);
         }
+
+
+        /* =====================================================
+         * BUTTONS
+         * ===================================================== */
 
         .tw3b-button {
-            background: var(--tw3b-accent);
-            color: #fff;
-            border: none;
-            border-radius: var(--tw3b-radius-sm);
-            padding: 8px 12px;
-            font-size: 13px;
-            cursor: pointer;
-            width: 100%;
-            transition: opacity 0.12s ease;
+
+            background:
+                var(--tw3b-accent);
+
+            color:
+                #fff;
+
+            border:
+                none;
+
+            border-radius:
+                var(--tw3b-radius-sm);
+
+            padding:
+                8px 12px;
+
+            font-size:
+                13px;
+
+            cursor:
+                pointer;
+
+            width:
+                100%;
+
+            transition:
+                opacity 0.12s ease;
         }
+
 
         .tw3b-button:hover {
-            opacity: 0.9;
+
+            opacity:
+                0.9;
         }
+
 
         .tw3b-button-secondary {
-            background: transparent;
-            color: var(--tw3b-text-muted);
-            border: 1px solid var(--tw3b-border);
+
+            background:
+                transparent;
+
+            color:
+                var(--tw3b-text-muted);
+
+            border:
+                1px solid var(--tw3b-border);
         }
+
+
+        /* =====================================================
+         * ERROR
+         * ===================================================== */
 
         .tw3b-error {
-            background: var(--tw3b-red-bg);
-            color: var(--tw3b-red);
-            padding: 8px 10px;
-            border-radius: var(--tw3b-radius-sm);
-            font-size: 12px;
-            margin-bottom: 8px;
+
+            background:
+                var(--tw3b-red-bg);
+
+            color:
+                var(--tw3b-red);
+
+            padding:
+                8px 10px;
+
+            border-radius:
+                var(--tw3b-radius-sm);
+
+            font-size:
+                12px;
+
+            margin-bottom:
+                8px;
         }
+
+
+        /* =====================================================
+         * LOADING
+         * ===================================================== */
 
         .tw3b-skeleton {
-            background: linear-gradient(
-                90deg,
-                var(--tw3b-bg) 25%,
-                var(--tw3b-surface-hover) 37%,
-                var(--tw3b-bg) 63%
-            );
-            background-size: 400% 100%;
-            animation: tw3b-shimmer 1.4s ease infinite;
-            border-radius: var(--tw3b-radius-sm);
-            height: 14px;
-            margin-bottom: 6px;
+
+            background:
+                linear-gradient(
+                    90deg,
+                    var(--tw3b-bg) 25%,
+                    var(--tw3b-surface-hover) 37%,
+                    var(--tw3b-bg) 63%
+                );
+
+            background-size:
+                400% 100%;
+
+            animation:
+                tw3b-shimmer 1.4s ease infinite;
+
+            border-radius:
+                var(--tw3b-radius-sm);
+
+            height:
+                14px;
+
+            margin-bottom:
+                6px;
         }
+
 
         @keyframes tw3b-shimmer {
-            0% { background-position: 100% 50%; }
-            100% { background-position: 0 50%; }
+
+            0% {
+                background-position:
+                    100% 50%;
+            }
+
+            100% {
+                background-position:
+                    0 50%;
+            }
         }
 
+
+        /* =====================================================
+         * BACK
+         * ===================================================== */
+
         .tw3b-back {
-            color: var(--tw3b-accent);
-            cursor: pointer;
-            font-size: 12px;
-            margin-bottom: 10px;
-            display: inline-block;
+
+            color:
+                var(--tw3b-accent);
+
+            background:
+                transparent;
+
+            border:
+                none;
+
+            cursor:
+                pointer;
+
+            font-size:
+                12px;
+
+            margin-bottom:
+                10px;
+
+            display:
+                inline-block;
+
+            padding:
+                2px 0;
         }
+
+
+        .tw3b-back:hover {
+
+            text-decoration:
+                underline;
+        }
+
+
+        /* =====================================================
+         * VIEW
+         * ===================================================== */
+
+        .tw3b-view-container {
+
+            width:
+                100%;
+        }
+
+
+        /* =====================================================
+         * RESPONSIVE
+         * ===================================================== */
+
+        @media (max-width: 480px) {
+
+            .tw3b-panel {
+
+                width:
+                    min(340px, calc(100vw - 20px));
+
+                max-height:
+                    75vh;
+            }
+        }
+
     `;
 		document.head.appendChild(style);
 	}
@@ -1214,6 +1925,12 @@
 			this.panelBody = null;
 			this.searchInput = null;
 			this.iconBar = null;
+			this.fabPositionKey = "tornw3b-fab-position";
+			this.isDraggingFab = false;
+			this.fabDragOffsetX = 0;
+			this.fabDragOffsetY = 0;
+			this.fabWasDragged = false;
+			this.fabPointerMoved = false;
 		}
 		mount() {
 			injectStyles();
@@ -1222,7 +1939,6 @@
 			this.fab.type = "button";
 			this.fab.innerHTML = "💰";
 			this.fab.setAttribute("aria-label", "Abrir TornW3B Trader");
-			this.fab.addEventListener("click", () => this.toggle());
 			this.panel = document.createElement("div");
 			this.panel.className = "tw3b-panel";
 			this.panelBody = document.createElement("div");
@@ -1230,8 +1946,157 @@
 			this.panel.appendChild(this.panelBody);
 			document.body.appendChild(this.fab);
 			document.body.appendChild(this.panel);
+			this.loadFabPosition();
+			this.enableFabDragging();
+			window.addEventListener("resize", () => {
+				this.keepFabInsideViewport();
+				if (this.panel.classList.contains("open")) this.updatePanelPosition();
+			});
 			this.renderMenu();
 			this.refreshAlertBadge();
+		}
+		loadFabPosition() {
+			if (!this.fab) return;
+			try {
+				const raw = localStorage.getItem(this.fabPositionKey);
+				if (!raw) return;
+				const position = JSON.parse(raw);
+				const left = Number(position?.left);
+				const top = Number(position?.top);
+				if (!Number.isFinite(left) || !Number.isFinite(top)) return;
+				this.fab.style.left = `${left}px`;
+				this.fab.style.top = `${top}px`;
+				this.fab.style.right = "auto";
+				this.fab.style.bottom = "auto";
+				this.keepFabInsideViewport();
+			} catch (error) {
+				console.warn("[TornW3B] No se pudo recuperar la posición del botón:", error);
+			}
+		}
+		saveFabPosition() {
+			if (!this.fab) return;
+			const rect = this.fab.getBoundingClientRect();
+			try {
+				localStorage.setItem(this.fabPositionKey, JSON.stringify({
+					left: Math.round(rect.left),
+					top: Math.round(rect.top)
+				}));
+			} catch (error) {
+				console.warn("[TornW3B] No se pudo guardar la posición del botón:", error);
+			}
+		}
+		keepFabInsideViewport() {
+			if (!this.fab) return;
+			const rect = this.fab.getBoundingClientRect();
+			const width = this.fab.offsetWidth;
+			const height = this.fab.offsetHeight;
+			if (!(this.fab.style.left !== "" && this.fab.style.top !== "")) return;
+			let left = rect.left;
+			let top = rect.top;
+			const maxLeft = Math.max(0, window.innerWidth - width);
+			const maxTop = Math.max(0, window.innerHeight - height);
+			left = Math.max(0, Math.min(left, maxLeft));
+			top = Math.max(0, Math.min(top, maxTop));
+			this.fab.style.left = `${Math.round(left)}px`;
+			this.fab.style.top = `${Math.round(top)}px`;
+			this.fab.style.right = "auto";
+			this.fab.style.bottom = "auto";
+			this.saveFabPosition();
+		}
+		enableFabDragging() {
+			if (!this.fab) return;
+			this.fab.addEventListener("pointerdown", (event) => {
+				if (event.pointerType === "mouse" && event.button !== 0) return;
+				const rect = this.fab.getBoundingClientRect();
+				this.fab.style.left = `${rect.left}px`;
+				this.fab.style.top = `${rect.top}px`;
+				this.fab.style.right = "auto";
+				this.fab.style.bottom = "auto";
+				this.fabDragOffsetX = event.clientX - rect.left;
+				this.fabDragOffsetY = event.clientY - rect.top;
+				this.isDraggingFab = true;
+				this.fabPointerMoved = false;
+				this.fabWasDragged = false;
+				event.preventDefault();
+				try {
+					this.fab.setPointerCapture(event.pointerId);
+				} catch {}
+			});
+			this.fab.addEventListener("pointermove", (event) => {
+				if (!this.isDraggingFab) return;
+				const movementX = Math.abs(event.movementX || 0);
+				const movementY = Math.abs(event.movementY || 0);
+				if (movementX > 1 || movementY > 1) {
+					this.fabPointerMoved = true;
+					this.fabWasDragged = true;
+				}
+				const width = this.fab.offsetWidth;
+				const height = this.fab.offsetHeight;
+				let left = event.clientX - this.fabDragOffsetX;
+				let top = event.clientY - this.fabDragOffsetY;
+				left = Math.max(0, Math.min(left, window.innerWidth - width));
+				top = Math.max(0, Math.min(top, window.innerHeight - height));
+				this.fab.style.left = `${left}px`;
+				this.fab.style.top = `${top}px`;
+				this.fab.style.right = "auto";
+				this.fab.style.bottom = "auto";
+				if (this.panel && this.panel.classList.contains("open")) this.updatePanelPosition();
+			});
+			this.fab.addEventListener("pointerup", (event) => {
+				if (!this.isDraggingFab) return;
+				this.isDraggingFab = false;
+				try {
+					this.fab.releasePointerCapture(event.pointerId);
+				} catch {}
+				if (this.fabPointerMoved) {
+					this.saveFabPosition();
+					if (this.panel && this.panel.classList.contains("open")) this.updatePanelPosition();
+					this.fabWasDragged = true;
+					setTimeout(() => {
+						this.fabWasDragged = false;
+					}, 150);
+				} else this.fabWasDragged = false;
+				this.fabPointerMoved = false;
+			});
+			this.fab.addEventListener("pointercancel", (event) => {
+				if (!this.isDraggingFab) return;
+				this.isDraggingFab = false;
+				try {
+					this.fab.releasePointerCapture(event.pointerId);
+				} catch {}
+				this.saveFabPosition();
+				this.fabWasDragged = false;
+				this.fabPointerMoved = false;
+			});
+			this.fab.addEventListener("click", (event) => {
+				if (this.fabWasDragged) {
+					event.preventDefault();
+					event.stopPropagation();
+					return;
+				}
+				this.toggle();
+			});
+		}
+		updatePanelPosition() {
+			if (!this.fab || !this.panel) return;
+			const fabRect = this.fab.getBoundingClientRect();
+			const panelWidth = this.panel.offsetWidth || 340;
+			const panelHeight = this.panel.offsetHeight || 400;
+			const gap = 10;
+			const margin = 8;
+			let left = fabRect.left;
+			left = Math.min(left, window.innerWidth - panelWidth - margin);
+			left = Math.max(margin, left);
+			let top;
+			const spaceBelow = window.innerHeight - fabRect.bottom - gap - margin;
+			const spaceAbove = fabRect.top - gap - margin;
+			if (spaceBelow >= panelHeight) top = fabRect.bottom + gap;
+			else if (spaceAbove >= panelHeight) top = fabRect.top - panelHeight - gap;
+			else top = Math.max(margin, Math.min(fabRect.bottom + gap, window.innerHeight - panelHeight - margin));
+			this.panel.style.left = `${Math.round(left)}px`;
+			this.panel.style.top = `${Math.round(top)}px`;
+			this.panel.style.right = "auto";
+			this.panel.style.bottom = "auto";
 		}
 		toggle() {
 			if (this.panel.classList.contains("open")) this.close();
@@ -1239,6 +2104,9 @@
 		}
 		open() {
 			this.panel.classList.add("open");
+			requestAnimationFrame(() => {
+				this.updatePanelPosition();
+			});
 			if (this.searchInput) setTimeout(() => {
 				this.searchInput.focus();
 			}, 100);
@@ -1344,6 +2212,7 @@
 		}
 		showLoading(itemName) {
 			this.panelBody.innerHTML = `
+
             <div class="tw3b-loading">
 
                 <div class="tw3b-card-title">
@@ -1357,6 +2226,7 @@
                 </div>
 
             </div>
+
         `;
 		}
 		showError(itemName, message) {
@@ -1417,6 +2287,9 @@
 			this.activeViewInstance = await view.render(container, this.ctx, (nextView, nextParams) => {
 				this.navigate(nextView, nextParams);
 			}, params) || null;
+			if (this.panel.classList.contains("open")) requestAnimationFrame(() => {
+				this.updatePanelPosition();
+			});
 		}
 		hideSuggestions() {
 			const suggestions = document.getElementById("tw3b-suggestions");
@@ -1426,7 +2299,7 @@
 			if (!this.ctx.storage) return;
 			try {
 				const audits = await this.ctx.storage.getAllAudits();
-				const alertCount = Object.values(audits).filter((audit) => audit && (audit.status === "RED" || audit.status === "YELLOW")).length;
+				const alertCount = Object.values(audits || {}).filter((audit) => audit && (audit.status === "RED" || audit.status === "YELLOW")).length;
 				const badge = this.panelBody.querySelector("#tw3b-alert-count");
 				if (badge) {
 					badge.textContent = String(alertCount);
@@ -1668,7 +2541,8 @@
                 type="text"
                 class="tw3b-search"
                 id="tw3b-audit-filter"
-                placeholder="🔎 Filtrar por nombre..."
+                placeholder="🔎 Buscar artículo..."
+                autocomplete="off"
             >
 
             <div id="tw3b-audit-list">
@@ -1690,20 +2564,26 @@
             `;
 				return null;
 			}
+			const list = Object.values(audits || {}).filter(Boolean);
 			const order = {
 				RED: 0,
 				YELLOW: 1,
 				GREEN: 2
 			};
-			const list = Object.values(audits || {}).filter(Boolean).sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3));
+			list.sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3));
 			const listEl = container.querySelector("#tw3b-audit-list");
 			const renderItems = (filterText = "") => {
 				const normalizedFilter = String(filterText).trim().toLowerCase();
-				const filtered = normalizedFilter ? list.filter((audit) => String(audit?.itemName || "").toLowerCase().includes(normalizedFilter)) : list;
+				let filtered;
+				if (normalizedFilter) filtered = list.filter((audit) => String(audit?.itemName || "").toLowerCase().includes(normalizedFilter));
+				else filtered = list.filter((audit) => audit?.status === "RED" || audit?.status === "YELLOW");
 				if (filtered.length === 0) {
 					listEl.innerHTML = `
+
                         <div class="tw3b-card-sub">
-                            No hay artículos auditados todavía.
+
+                            ${normalizedFilter ? "No se encontró ningún artículo auditado." : "No hay artículos en rojo o amarillo."}
+
                         </div>
                     `;
 					return;

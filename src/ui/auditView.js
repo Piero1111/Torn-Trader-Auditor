@@ -36,6 +36,11 @@ export const auditView = {
      * =========================================================
      * LISTA DE AUDITORÍAS
      * =========================================================
+     *
+     * Por defecto solo se muestran RED y YELLOW.
+     *
+     * Los GREEN permanecen disponibles mediante
+     * el buscador manual.
      */
 
     async renderList(
@@ -49,7 +54,8 @@ export const auditView = {
                 type="text"
                 class="tw3b-search"
                 id="tw3b-audit-filter"
-                placeholder="🔎 Filtrar por nombre..."
+                placeholder="🔎 Buscar artículo..."
+                autocomplete="off"
             >
 
             <div id="tw3b-audit-list">
@@ -87,6 +93,20 @@ export const auditView = {
         }
 
 
+        /*
+         * Convertimos el objeto de auditorías
+         * en una lista limpia.
+         */
+        const list =
+            Object.values(
+                audits || {}
+            )
+            .filter(Boolean);
+
+
+        /*
+         * Orden de prioridad.
+         */
         const order = {
             RED: 0,
             YELLOW: 1,
@@ -94,16 +114,14 @@ export const auditView = {
         };
 
 
-        const list =
-            Object.values(
-                audits || {}
-            )
-            .filter(Boolean)
-            .sort(
-                (a, b) =>
-                    (order[a.status] ?? 3) -
-                    (order[b.status] ?? 3)
-            );
+        /*
+         * Ordenamos una sola vez.
+         */
+        list.sort(
+            (a, b) =>
+                (order[a.status] ?? 3) -
+                (order[b.status] ?? 3)
+        );
 
 
         const listEl =
@@ -111,6 +129,21 @@ export const auditView = {
                 "#tw3b-audit-list"
             );
 
+
+        /*
+         * =====================================================
+         * RENDER
+         * =====================================================
+         *
+         * Sin búsqueda:
+         *   RED + YELLOW
+         *
+         * Con búsqueda:
+         *   RED + YELLOW + GREEN
+         *
+         * Esto permite consultar manualmente
+         * artículos verdes sin llenar la lista.
+         */
 
         const renderItems =
             (filterText = "") => {
@@ -123,20 +156,40 @@ export const auditView = {
                     .toLowerCase();
 
 
-                const filtered =
-                    normalizedFilter
+                let filtered;
 
-                        ? list.filter(audit =>
-                            String(
-                                audit?.itemName || ""
-                            )
-                            .toLowerCase()
-                            .includes(
-                                normalizedFilter
-                            )
-                        )
 
-                        : list;
+                if (normalizedFilter) {
+
+                    /*
+                     * Búsqueda manual:
+                     * permitimos TODOS los estados.
+                     */
+                    filtered =
+                        list.filter(
+                            audit =>
+                                String(
+                                    audit?.itemName || ""
+                                )
+                                .toLowerCase()
+                                .includes(
+                                    normalizedFilter
+                                )
+                        );
+
+                } else {
+
+                    /*
+                     * Vista inicial:
+                     * únicamente alertas.
+                     */
+                    filtered =
+                        list.filter(
+                            audit =>
+                                audit?.status === "RED" ||
+                                audit?.status === "YELLOW"
+                        );
+                }
 
 
                 if (
@@ -144,8 +197,15 @@ export const auditView = {
                 ) {
 
                     listEl.innerHTML = `
+
                         <div class="tw3b-card-sub">
-                            No hay artículos auditados todavía.
+
+                            ${
+                                normalizedFilter
+                                    ? "No se encontró ningún artículo auditado."
+                                    : "No hay artículos en rojo o amarillo."
+                            }
+
                         </div>
                     `;
 
@@ -153,7 +213,8 @@ export const auditView = {
                 }
 
 
-                listEl.innerHTML = "";
+                listEl.innerHTML =
+                    "";
 
 
                 for (
@@ -165,6 +226,7 @@ export const auditView = {
                         document.createElement(
                             "div"
                         );
+
 
                     card.className =
                         "tw3b-card";
@@ -248,6 +310,11 @@ export const auditView = {
             };
 
 
+        /*
+         * Render inicial.
+         *
+         * Aquí NO aparecerán los GREEN.
+         */
         renderItems();
 
 
@@ -547,11 +614,14 @@ function formatNumber(value) {
     const number =
         Number(value);
 
+
     if (
         !Number.isFinite(number)
     ) {
+
         return "-";
     }
+
 
     return number.toLocaleString(
         "en-US"
@@ -566,8 +636,10 @@ function escapeHtml(str) {
             "div"
         );
 
+
     div.textContent =
         String(str ?? "");
+
 
     return div.innerHTML;
 }

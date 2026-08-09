@@ -1,6 +1,8 @@
+
 import {
     injectStyles
 } from "./styles.js";
+
 
 const VIEWS = {
 
@@ -11,6 +13,7 @@ const VIEWS = {
     SETTINGS: "settings"
 
 };
+
 
 export class App {
 
@@ -31,6 +34,32 @@ export class App {
 
         this.searchInput = null;
         this.iconBar = null;
+
+
+        /*
+         * =====================================================
+         * FAB
+         * =====================================================
+         */
+
+        this.fabPositionKey =
+            "tornw3b-fab-position";
+
+        this.isDraggingFab =
+            false;
+
+        this.fabDragOffsetX =
+            0;
+
+        this.fabDragOffsetY =
+            0;
+
+        this.fabWasDragged =
+            false;
+
+        this.fabPointerMoved =
+            false;
+
     }
 
 
@@ -43,6 +72,13 @@ export class App {
     mount() {
 
         injectStyles();
+
+
+        /*
+         * =====================================================
+         * FAB
+         * =====================================================
+         */
 
         this.fab =
             document.createElement("button");
@@ -61,11 +97,12 @@ export class App {
             "Abrir TornW3B Trader"
         );
 
-        this.fab.addEventListener(
-            "click",
-            () => this.toggle()
-        );
 
+        /*
+         * =====================================================
+         * PANEL
+         * =====================================================
+         */
 
         this.panel =
             document.createElement("div");
@@ -86,6 +123,14 @@ export class App {
         );
 
 
+        /*
+         * IMPORTANTE:
+         *
+         * Primero insertamos los elementos
+         * en el DOM y después recuperamos
+         * la posición guardada.
+         */
+
         document.body.appendChild(
             this.fab
         );
@@ -95,9 +140,804 @@ export class App {
         );
 
 
+        /*
+         * Ahora sí podemos recuperar
+         * correctamente la posición.
+         */
+
+        this.loadFabPosition();
+
+
+        /*
+         * Activar arrastre.
+         */
+
+        this.enableFabDragging();
+
+
+        /*
+         * =====================================================
+         * RESIZE
+         * =====================================================
+         */
+
+        window.addEventListener(
+            "resize",
+            () => {
+
+                this.keepFabInsideViewport();
+
+                if (
+                    this.panel.classList.contains(
+                        "open"
+                    )
+                ) {
+
+                    this.updatePanelPosition();
+
+                }
+
+            }
+        );
+
+
+        /*
+         * =====================================================
+         * MENÚ INICIAL
+         * =====================================================
+         */
+
         this.renderMenu();
 
         this.refreshAlertBadge();
+
+    }
+
+
+    /*
+     * =========================================================
+     * POSICIÓN DEL FAB
+     * =========================================================
+     */
+
+    loadFabPosition() {
+
+        if (!this.fab) {
+            return;
+        }
+
+
+        try {
+
+            const raw =
+                localStorage.getItem(
+                    this.fabPositionKey
+                );
+
+
+            /*
+             * Si no existe una posición guardada,
+             * dejamos que CSS utilice su posición
+             * inicial.
+             */
+
+            if (!raw) {
+                return;
+            }
+
+
+            const position =
+                JSON.parse(raw);
+
+
+            const left =
+                Number(position?.left);
+
+            const top =
+                Number(position?.top);
+
+
+            if (
+                !Number.isFinite(left) ||
+                !Number.isFinite(top)
+            ) {
+
+                return;
+
+            }
+
+
+            /*
+             * Aplicar posición absoluta
+             * respecto al viewport.
+             */
+
+            this.fab.style.left =
+                `${left}px`;
+
+            this.fab.style.top =
+                `${top}px`;
+
+            this.fab.style.right =
+                "auto";
+
+            this.fab.style.bottom =
+                "auto";
+
+
+            /*
+             * Comprobar que siga dentro
+             * de la pantalla.
+             */
+
+            this.keepFabInsideViewport();
+
+
+        } catch (error) {
+
+            console.warn(
+                "[TornW3B] No se pudo recuperar la posición del botón:",
+                error
+            );
+
+        }
+
+    }
+
+
+    saveFabPosition() {
+
+        if (!this.fab) {
+            return;
+        }
+
+
+        const rect =
+            this.fab.getBoundingClientRect();
+
+
+        try {
+
+            localStorage.setItem(
+                this.fabPositionKey,
+                JSON.stringify({
+
+                    left:
+                        Math.round(
+                            rect.left
+                        ),
+
+                    top:
+                        Math.round(
+                            rect.top
+                        )
+
+                })
+            );
+
+
+        } catch (error) {
+
+            console.warn(
+                "[TornW3B] No se pudo guardar la posición del botón:",
+                error
+            );
+
+        }
+
+    }
+
+
+    keepFabInsideViewport() {
+
+        if (!this.fab) {
+            return;
+        }
+
+
+        const rect =
+            this.fab.getBoundingClientRect();
+
+
+        const width =
+            this.fab.offsetWidth;
+
+        const height =
+            this.fab.offsetHeight;
+
+
+        /*
+         * Solo hacemos esto si el FAB
+         * tiene una posición manual.
+         */
+
+        const hasManualPosition =
+            this.fab.style.left !== "" &&
+            this.fab.style.top !== "";
+
+
+        if (!hasManualPosition) {
+            return;
+        }
+
+
+        let left =
+            rect.left;
+
+        let top =
+            rect.top;
+
+
+        const maxLeft =
+            Math.max(
+                0,
+                window.innerWidth -
+                width
+            );
+
+
+        const maxTop =
+            Math.max(
+                0,
+                window.innerHeight -
+                height
+            );
+
+
+        left =
+            Math.max(
+                0,
+                Math.min(
+                    left,
+                    maxLeft
+                )
+            );
+
+
+        top =
+            Math.max(
+                0,
+                Math.min(
+                    top,
+                    maxTop
+                )
+            );
+
+
+        this.fab.style.left =
+            `${Math.round(left)}px`;
+
+        this.fab.style.top =
+            `${Math.round(top)}px`;
+
+        this.fab.style.right =
+            "auto";
+
+        this.fab.style.bottom =
+            "auto";
+
+
+        this.saveFabPosition();
+
+    }
+
+
+    /*
+     * =========================================================
+     * ARRASTRE DEL FAB
+     * =========================================================
+     */
+
+    enableFabDragging() {
+
+        if (!this.fab) {
+            return;
+        }
+
+
+        this.fab.addEventListener(
+            "pointerdown",
+            event => {
+
+                /*
+                 * Ignorar botones secundarios
+                 * del mouse.
+                 */
+
+                if (
+                    event.pointerType === "mouse" &&
+                    event.button !== 0
+                ) {
+
+                    return;
+
+                }
+
+
+                const rect =
+                    this.fab.getBoundingClientRect();
+
+
+                /*
+                 * Convertir inmediatamente
+                 * la posición actual a left/top.
+                 */
+
+                this.fab.style.left =
+                    `${rect.left}px`;
+
+                this.fab.style.top =
+                    `${rect.top}px`;
+
+                this.fab.style.right =
+                    "auto";
+
+                this.fab.style.bottom =
+                    "auto";
+
+
+                this.fabDragOffsetX =
+                    event.clientX -
+                    rect.left;
+
+                this.fabDragOffsetY =
+                    event.clientY -
+                    rect.top;
+
+
+                this.isDraggingFab =
+                    true;
+
+                this.fabPointerMoved =
+                    false;
+
+                this.fabWasDragged =
+                    false;
+
+
+                /*
+                 * Evita comportamientos de selección
+                 * o drag nativo del navegador.
+                 */
+
+                event.preventDefault();
+
+
+                try {
+
+                    this.fab.setPointerCapture(
+                        event.pointerId
+                    );
+
+                } catch {}
+
+            }
+        );
+
+
+        this.fab.addEventListener(
+            "pointermove",
+            event => {
+
+                if (
+                    !this.isDraggingFab
+                ) {
+
+                    return;
+
+                }
+
+
+                const movementX =
+                    Math.abs(
+                        event.movementX || 0
+                    );
+
+                const movementY =
+                    Math.abs(
+                        event.movementY || 0
+                    );
+
+
+                /*
+                 * Evitamos considerar como arrastre
+                 * un pequeño movimiento accidental.
+                 */
+
+                if (
+                    movementX > 1 ||
+                    movementY > 1
+                ) {
+
+                    this.fabPointerMoved =
+                        true;
+
+                    this.fabWasDragged =
+                        true;
+
+                }
+
+
+                const width =
+                    this.fab.offsetWidth;
+
+                const height =
+                    this.fab.offsetHeight;
+
+
+                let left =
+                    event.clientX -
+                    this.fabDragOffsetX;
+
+                let top =
+                    event.clientY -
+                    this.fabDragOffsetY;
+
+
+                /*
+                 * Mantener dentro del viewport.
+                 */
+
+                left =
+                    Math.max(
+                        0,
+                        Math.min(
+                            left,
+                            window.innerWidth -
+                            width
+                        )
+                    );
+
+
+                top =
+                    Math.max(
+                        0,
+                        Math.min(
+                            top,
+                            window.innerHeight -
+                            height
+                        )
+                    );
+
+
+                this.fab.style.left =
+                    `${left}px`;
+
+                this.fab.style.top =
+                    `${top}px`;
+
+                this.fab.style.right =
+                    "auto";
+
+                this.fab.style.bottom =
+                    "auto";
+
+
+                /*
+                 * El panel acompaña al FAB.
+                 */
+
+                if (
+                    this.panel &&
+                    this.panel.classList.contains(
+                        "open"
+                    )
+                ) {
+
+                    this.updatePanelPosition();
+
+                }
+
+            }
+        );
+
+
+        this.fab.addEventListener(
+            "pointerup",
+            event => {
+
+                if (
+                    !this.isDraggingFab
+                ) {
+
+                    return;
+
+                }
+
+
+                this.isDraggingFab =
+                    false;
+
+
+                try {
+
+                    this.fab.releasePointerCapture(
+                        event.pointerId
+                    );
+
+                } catch {}
+
+
+                if (
+                    this.fabPointerMoved
+                ) {
+
+                    /*
+                     * Guardar inmediatamente
+                     * la nueva posición.
+                     */
+
+                    this.saveFabPosition();
+
+
+                    /*
+                     * El panel queda sincronizado.
+                     */
+
+                    if (
+                        this.panel &&
+                        this.panel.classList.contains(
+                            "open"
+                        )
+                    ) {
+
+                        this.updatePanelPosition();
+
+                    }
+
+
+                    /*
+                     * Mantener esta bandera durante
+                     * el click que genera pointerup.
+                     */
+
+                    this.fabWasDragged =
+                        true;
+
+
+                    setTimeout(
+                        () => {
+
+                            this.fabWasDragged =
+                                false;
+
+                        },
+                        150
+                    );
+
+                } else {
+
+                    this.fabWasDragged =
+                        false;
+
+                }
+
+
+                this.fabPointerMoved =
+                    false;
+
+            }
+        );
+
+
+        this.fab.addEventListener(
+            "pointercancel",
+            event => {
+
+                if (
+                    !this.isDraggingFab
+                ) {
+
+                    return;
+
+                }
+
+
+                this.isDraggingFab =
+                    false;
+
+
+                try {
+
+                    this.fab.releasePointerCapture(
+                        event.pointerId
+                    );
+
+                } catch {}
+
+
+                this.saveFabPosition();
+
+
+                this.fabWasDragged =
+                    false;
+
+                this.fabPointerMoved =
+                    false;
+
+            }
+        );
+
+
+        /*
+         * Click separado del arrastre.
+         */
+
+        this.fab.addEventListener(
+            "click",
+            event => {
+
+                if (
+                    this.fabWasDragged
+                ) {
+
+                    event.preventDefault();
+
+                    event.stopPropagation();
+
+                    return;
+
+                }
+
+
+                this.toggle();
+
+            }
+        );
+
+    }
+
+
+    /*
+     * =========================================================
+     * POSICIÓN DEL PANEL
+     * =========================================================
+     */
+
+    updatePanelPosition() {
+
+        if (
+            !this.fab ||
+            !this.panel
+        ) {
+
+            return;
+
+        }
+
+
+        const fabRect =
+            this.fab.getBoundingClientRect();
+
+
+        /*
+         * El panel debe estar abierto para
+         * obtener sus dimensiones reales.
+         */
+
+        const panelWidth =
+            this.panel.offsetWidth ||
+            340;
+
+        const panelHeight =
+            this.panel.offsetHeight ||
+            400;
+
+
+        const gap =
+            10;
+
+        const margin =
+            8;
+
+
+        /*
+         * =====================================================
+         * HORIZONTAL
+         * =====================================================
+         */
+
+        let left =
+            fabRect.left;
+
+
+        /*
+         * Si el panel se sale por la derecha,
+         * desplazamos su posición hacia la izquierda.
+         */
+
+        left =
+            Math.min(
+                left,
+                window.innerWidth -
+                panelWidth -
+                margin
+            );
+
+
+        left =
+            Math.max(
+                margin,
+                left
+            );
+
+
+        /*
+         * =====================================================
+         * VERTICAL
+         * =====================================================
+         *
+         * Intentamos primero colocarlo debajo.
+         * Si no entra, lo colocamos arriba.
+         */
+
+        let top;
+
+
+        const spaceBelow =
+            window.innerHeight -
+            fabRect.bottom -
+            gap -
+            margin;
+
+
+        const spaceAbove =
+            fabRect.top -
+            gap -
+            margin;
+
+
+        if (
+            spaceBelow >= panelHeight
+        ) {
+
+            top =
+                fabRect.bottom +
+                gap;
+
+        } else if (
+            spaceAbove >= panelHeight
+        ) {
+
+            top =
+                fabRect.top -
+                panelHeight -
+                gap;
+
+        } else {
+
+            /*
+             * Si no entra ni arriba ni abajo,
+             * lo mantenemos dentro del viewport.
+             */
+
+            top =
+                Math.max(
+                    margin,
+                    Math.min(
+                        fabRect.bottom +
+                        gap,
+                        window.innerHeight -
+                        panelHeight -
+                        margin
+                    )
+                );
+
+        }
+
+
+        this.panel.style.left =
+            `${Math.round(left)}px`;
+
+        this.panel.style.top =
+            `${Math.round(top)}px`;
+
+        this.panel.style.right =
+            "auto";
+
+        this.panel.style.bottom =
+            "auto";
+
     }
 
 
@@ -120,7 +960,9 @@ export class App {
         } else {
 
             this.open();
+
         }
+
     }
 
 
@@ -129,6 +971,16 @@ export class App {
         this.panel.classList.add(
             "open"
         );
+
+
+        requestAnimationFrame(
+            () => {
+
+                this.updatePanelPosition();
+
+            }
+        );
+
 
         if (this.searchInput) {
 
@@ -140,7 +992,9 @@ export class App {
                 },
                 100
             );
+
         }
+
     }
 
 
@@ -151,6 +1005,7 @@ export class App {
         );
 
         this.hideSuggestions();
+
     }
 
 
@@ -208,11 +1063,12 @@ export class App {
 
         this.searchInput.addEventListener(
             "input",
-            (event) => {
+            event => {
 
                 this.handleSearch(
                     event.target.value
                 );
+
             }
         );
 
@@ -282,11 +1138,8 @@ export class App {
         );
 
 
-        /*
-         * Al volver al menú actualizamos
-         * el badge porque el DOM fue reconstruido.
-         */
         this.refreshAlertBadge();
+
     }
 
 
@@ -305,6 +1158,7 @@ export class App {
 
         const button =
             document.createElement("button");
+
 
         button.type =
             "button";
@@ -357,6 +1211,7 @@ export class App {
             button.appendChild(
                 badgeElement
             );
+
         }
 
 
@@ -367,6 +1222,7 @@ export class App {
                 this.navigate(
                     view
                 );
+
             }
         );
 
@@ -377,6 +1233,7 @@ export class App {
 
 
         return button;
+
     }
 
 
@@ -399,6 +1256,7 @@ export class App {
         ) {
 
             return;
+
         }
 
 
@@ -408,15 +1266,18 @@ export class App {
 
             this.ctx,
 
-            async (item) => {
+            async item => {
 
                 await this.selectSearchItem(
                     item
                 );
+
             },
 
             this.searchInput
+
         );
+
     }
 
 
@@ -443,6 +1304,7 @@ export class App {
             );
 
             return;
+
         }
 
 
@@ -458,11 +1320,6 @@ export class App {
             );
 
 
-            /*
-             * El Scheduler es el único responsable
-             * de decidir si utiliza cache o realiza
-             * una nueva auditoría.
-             */
             const result =
                 await this.ctx.scheduler
                     .getOrAudit(item);
@@ -476,16 +1333,10 @@ export class App {
                 );
 
                 return;
+
             }
 
 
-            /*
-             * La auditoría ya fue obtenida.
-             *
-             * Se pasa directamente a SaleView
-             * para evitar una segunda llamada
-             * a Scheduler.getOrAudit().
-             */
             await this.navigate(
                 VIEWS.SALE,
                 {
@@ -508,7 +1359,9 @@ export class App {
                 error?.message ||
                 "No se pudo auditar el artículo."
             );
+
         }
+
     }
 
 
@@ -521,6 +1374,7 @@ export class App {
     showLoading(itemName) {
 
         this.panelBody.innerHTML = `
+
             <div class="tw3b-loading">
 
                 <div class="tw3b-card-title">
@@ -534,7 +1388,9 @@ export class App {
                 </div>
 
             </div>
+
         `;
+
     }
 
 
@@ -586,7 +1442,9 @@ export class App {
                 "click",
                 () => this.renderMenu()
             );
+
         }
+
     }
 
 
@@ -608,6 +1466,7 @@ export class App {
         ) {
 
             this.activeViewInstance.destroy();
+
         }
 
 
@@ -634,6 +1493,7 @@ export class App {
             this.renderMenu();
 
             return;
+
         }
 
 
@@ -653,15 +1513,19 @@ export class App {
             );
 
             return;
+
         }
 
 
         /*
-         * Botón volver.
+         * =====================================================
+         * BOTÓN VOLVER
+         * =====================================================
          */
 
         const back =
             document.createElement("button");
+
 
         back.type =
             "button";
@@ -688,6 +1552,7 @@ export class App {
                 this.navigate(
                     VIEWS.MENU
                 );
+
             }
         );
 
@@ -698,7 +1563,9 @@ export class App {
 
 
         /*
-         * Contenedor de la vista.
+         * =====================================================
+         * CONTENEDOR DE VISTA
+         * =====================================================
          */
 
         const container =
@@ -714,7 +1581,9 @@ export class App {
 
 
         /*
-         * Renderizar vista.
+         * =====================================================
+         * RENDERIZAR VISTA
+         * =====================================================
          */
 
         this.activeViewInstance =
@@ -733,11 +1602,35 @@ export class App {
                         nextView,
                         nextParams
                     );
+
                 },
 
                 params
 
             ) || null;
+
+
+        /*
+         * Recalcular posición porque
+         * la altura del panel puede haber cambiado.
+         */
+
+        if (
+            this.panel.classList.contains(
+                "open"
+            )
+        ) {
+
+            requestAnimationFrame(
+                () => {
+
+                    this.updatePanelPosition();
+
+                }
+            );
+
+        }
+
     }
 
 
@@ -759,7 +1652,9 @@ export class App {
 
             suggestions.style.display =
                 "none";
+
         }
+
     }
 
 
@@ -784,18 +1679,21 @@ export class App {
 
 
             const alertCount =
-                Object.values(audits)
-                    .filter(
-                        audit =>
-                            audit &&
-                            (
-                                audit.status ===
-                                "RED" ||
-                                audit.status ===
-                                "YELLOW"
-                            )
-                    )
-                    .length;
+                Object.values(
+                    audits || {}
+                )
+                .filter(
+                    audit =>
+                        audit &&
+                        (
+                            audit.status ===
+                            "RED" ||
+
+                            audit.status ===
+                            "YELLOW"
+                        )
+                )
+                .length;
 
 
             const badge =
@@ -813,6 +1711,7 @@ export class App {
                     alertCount > 0
                         ? "flex"
                         : "none";
+
             }
 
 
@@ -822,6 +1721,7 @@ export class App {
                     "has-alerts",
                     alertCount > 0
                 );
+
             }
 
 
@@ -831,8 +1731,11 @@ export class App {
                 "[TornW3B] No se pudo actualizar badge:",
                 error
             );
+
         }
+
     }
+
 }
 
 
@@ -845,12 +1748,17 @@ export class App {
 function escapeHtml(str) {
 
     const div =
-        document.createElement("div");
+        document.createElement(
+            "div"
+        );
+
 
     div.textContent =
         String(str ?? "");
 
+
     return div.innerHTML;
+
 }
 
 

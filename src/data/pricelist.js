@@ -18,14 +18,43 @@ export class Pricelist {
      */
     async sync(userId) {
 
-        const raw =
-            await this.w3bAPI.getPricelist(userId);
+    const raw =
+        await this.w3bAPI.getPricelist(userId);
 
-        const items =
-            this.normalize(raw);
+    console.log(
+        "[TornW3B] W3B raw:",
+        raw
+    );
 
-        return this.storage.savePricelist(items);
-    }
+    console.log(
+        `[TornW3B] W3B devolvió ${
+            Array.isArray(raw)
+                ? raw.length
+                : 0
+        } items`
+    );
+
+    const items =
+        this.normalize(raw);
+
+    console.log(
+        `[TornW3B] Después de normalizar: ${items.length} items`
+    );
+
+    const discarded =
+        (Array.isArray(raw)
+            ? raw.length
+            : 0) -
+        items.length;
+
+    console.log(
+        `[TornW3B] Descartados: ${discarded}`
+    );
+
+    return this.storage.savePricelist(
+        items
+    );
+}
 
 
     normalize(rawItems) {

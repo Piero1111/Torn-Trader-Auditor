@@ -1,24 +1,22 @@
+
 export class History {
 
     constructor({ tornAPI, storage }) {
-
         this.tornAPI = tornAPI;
         this.storage = storage;
 
         this.lastDayByItem = new Map();
-
         this.initialized = false;
     }
 
 
     /*
      * =========================================================
-     * DÍA DE TORN
+     * TORN DAY
      * =========================================================
      *
-     * Utilizamos el timestamp del servidor de Torn.
-     *
-     * Esto evita depender del reloj local del usuario.
+     * Obtiene el día actual utilizando el timestamp
+     * del servidor de Torn.
      */
 
     async getTornDay() {
@@ -27,15 +25,21 @@ export class History {
             await this.tornAPI.getTimestamp();
 
         const timestamp =
-            Number(response?.timestamp);
+            Number(
+                response?.timestamp
+            );
 
-        const validTimestamp =
-            Number.isFinite(timestamp)
-                ? timestamp
-                : Math.floor(Date.now() / 1000);
+        if (
+            !Number.isFinite(timestamp) ||
+            timestamp <= 0
+        ) {
+            return Math.floor(
+                Date.now() / 86400000
+            );
+        }
 
         return Math.floor(
-            validTimestamp / 86400
+            timestamp / 86400
         );
     }
 
@@ -45,52 +49,105 @@ export class History {
      * INIT
      * =========================================================
      *
-     * Reconstruye el último día registrado para cada artículo.
+     * Reconstruye lastDayByItem utilizando las
+     * auditorías existentes.
      *
-     * No dependemos de getAllAudits(), porque un artículo puede
-     * conservar historial aunque su auditoría actual no exista.
+     * No necesitamos getAllHistory().
      */
 
     async init() {
 
-        const history =
-            await this.storage.getAllHistory();
+        const audits =
+            await this.storage.getAllAudits();
 
-        this.lastDayByItem.clear();
 
-        for (const [itemId, snapshots] of Object.entries(history)) {
+        for (
+            const itemId in audits
+        ) {
 
-            if (
-                !Array.isArray(snapshots) ||
-                snapshots.length === 0
-            ) {
-                continue;
-            }
+            const numericItemId =
+                Number(itemId);
 
-            const last =
-                snapshots[snapshots.length - 1];
 
             if (
-                !last ||
                 !Number.isFinite(
-                    Number(last.timestamp)
+                    numericItemId
                 )
             ) {
                 continue;
             }
 
-            const day =
-                Math.floor(
-                    Number(last.timestamp) / 86400000
+
+            const history =
+                await this.storage.getHistory(
+                    numericItemId
                 );
 
+
+            if (
+                !Array.isArray(history) ||
+                history.length === 0
+            ) {
+                continue;
+            }
+
+
+            const last =
+                history[
+                    history.length - 1
+                ];
+
+
+            if (!last) {
+                continue;
+            }
+
+
+            /*
+             * Los snapshots guardan timestamp
+             * Unix en milisegundos.
+             */
+            const timestamp =
+                Number(
+                    last.timestamp
+                );
+
+
+            if (
+                !Number.isFinite(timestamp) ||
+                timestamp <= 0
+            ) {
+                continue;
+            }
+
+
+            /*
+             * Aquí usamos el mismo sistema de
+             * días basado en Unix timestamp.
+             *
+             * El timestamp de los snapshots es
+             * generado por Date.now().
+             */
+            const day =
+                Math.floor(
+                    timestamp / 86400000
+                );
+
+
             this.lastDayByItem.set(
-                Number(itemId),
+                numericItemId,
                 day
             );
         }
 
+
         this.initialized = true;
+
+
+        console.log(
+            `[History] Inicializado: ` +
+            `${this.lastDayByItem.size} artículos con historial.`
+        );
     }
 
 
@@ -99,72 +156,85 @@ export class History {
      * RECORD SNAPSHOT
      * =========================================================
      *
-     * Guarda como máximo un snapshot por artículo y por día.
+     * Guarda como máximo un snapshot por día.
      */
 
     async recordSnapshot(audit) {
 
+        if (!audit) {
+            return null;
+        }
+
+
+        const itemId =
+            Number(
+                audit.itemId
+            );
+
+
         if (
-            !audit ||
-            !Number.isFinite(
-                Number(audit.itemId)
-            )
+            !Number.isFinite(itemId) ||
+            itemId <= 0
         ) {
             return null;
         }
 
-        /*
-         * Si History todavía no fue inicializado,
-         * inicializamos antes de registrar.
-         */
-
-        if (!this.initialized) {
-            await this.init();
-        }
-
-        const itemId =
-            Number(audit.itemId);
 
         const tornDay =
             await this.getTornDay();
 
-        const lastDay =
-            this.lastDayByItem.get(itemId);
 
         /*
-         * Ya existe un snapshot correspondiente
-         * al día actual.
+         * IMPORTANTE:
+         *
+         * lastDayByItem está almacenando ahora
+         * el día calculado con timestamp local.
+         *
+         * Para evitar depender de una diferencia
+         * entre ambos relojes, calculamos también
+         * el día del snapshot según el timestamp
+         * del audit.
          */
+        const auditDay =
+            Math.floor(
+                Number(audit.timestamp) /
+                86400000
+            );
 
-        if (lastDay === tornDay) {
+
+        const lastDay =
+            this.lastDayByItem.get(
+                itemId
+            );
+
+
+        /*
+         * Si ya tenemos snapshot del día,
+         * no guardamos otro.
+         *
+         * En condiciones normales auditDay y
+         * tornDay representan el mismo día.
+         */
+        if (
+            lastDay === auditDay ||
+            lastDay === tornDay
+        ) {
             return null;
         }
 
-        /*
-         * Nos aseguramos de que el timestamp exista.
-         */
-
-        const snapshot = {
-            ...audit,
-
-            timestamp:
-                Number.isFinite(
-                    Number(audit.timestamp)
-                )
-                    ? Number(audit.timestamp)
-                    : Date.now()
-        };
 
         await this.storage.saveHistory(
-            snapshot
+            audit
         );
+
 
         this.lastDayByItem.set(
             itemId,
-            tornDay
+            auditDay
         );
 
-        return snapshot;
+
+        return audit;
     }
 
 
@@ -172,9 +242,6 @@ export class History {
      * =========================================================
      * SERIES
      * =========================================================
-     *
-     * Devuelve solamente los valores necesarios para
-     * representar la evolución histórica.
      */
 
     async getSeries(itemId) {
@@ -184,26 +251,19 @@ export class History {
                 Number(itemId)
             );
 
-        return history
-            .filter(
-                snapshot =>
-                    snapshot &&
-                    Number.isFinite(
-                        Number(snapshot.timestamp)
-                    )
-            )
-            .map(snapshot => ({
 
+        return history.map(
+            snapshot => ({
                 timestamp:
-                    Number(snapshot.timestamp),
+                    snapshot.timestamp,
 
                 realMarketValue:
-                    Number(snapshot.realMarketValue),
+                    snapshot.realMarketValue,
 
                 correctBuyPrice:
-                    Number(snapshot.correctBuyPrice)
-
-            }));
+                    snapshot.correctBuyPrice
+            })
+        );
     }
 
 
@@ -211,13 +271,6 @@ export class History {
      * =========================================================
      * SUMMARY
      * =========================================================
-     *
-     * Ventanas:
-     *
-     * - ayer
-     * - últimos 7 días
-     * - últimos 30 días
-     * - últimos 6 meses
      */
 
     async getSummary(itemId) {
@@ -226,6 +279,7 @@ export class History {
             await this.storage.getHistory(
                 Number(itemId)
             );
+
 
         const now =
             Date.now();
@@ -243,40 +297,39 @@ export class History {
             last30d: [],
 
             last6m: []
-
         };
 
 
-        for (const snapshot of history) {
+        for (
+            const snapshot of history
+        ) {
+
+            const timestamp =
+                Number(
+                    snapshot.timestamp
+                );
+
 
             if (
-                !snapshot ||
-                !Number.isFinite(
-                    Number(snapshot.timestamp)
-                )
+                !Number.isFinite(timestamp)
             ) {
                 continue;
             }
 
-            const timestamp =
-                Number(snapshot.timestamp);
 
             const age =
                 now - timestamp;
 
 
             /*
-             * Ayer:
+             * Ventana de ayer:
              *
-             * mayor a 24 horas
-             * y menor o igual a 48 horas.
-             *
-             * Los registros de hoy ya NO entran aquí.
+             * Se conserva la lógica original
+             * de "últimas 24 horas".
              */
-
             if (
-                age > day &&
-                age <= 2 * day
+                age >= 0 &&
+                age <= day
             ) {
 
                 buckets.yesterday.push(
@@ -284,10 +337,6 @@ export class History {
                 );
             }
 
-
-            /*
-             * Últimos 7 días.
-             */
 
             if (
                 age >= 0 &&
@@ -300,10 +349,6 @@ export class History {
             }
 
 
-            /*
-             * Últimos 30 días.
-             */
-
             if (
                 age >= 0 &&
                 age <= 30 * day
@@ -314,10 +359,6 @@ export class History {
                 );
             }
 
-
-            /*
-             * Últimos 6 meses.
-             */
 
             if (
                 age >= 0 &&
@@ -365,7 +406,7 @@ export class History {
     aggregate(snapshots) {
 
         if (
-            !Array.isArray(snapshots) ||
+            !snapshots ||
             snapshots.length === 0
         ) {
             return null;
@@ -376,65 +417,50 @@ export class History {
             snapshots.length;
 
 
-        const sum =
-            (key) =>
-                snapshots.reduce(
-                    (total, snapshot) => {
-
-                        const value =
-                            Number(
-                                snapshot?.[key]
-                            );
-
-                        return total +
-                            (
-                                Number.isFinite(value)
-                                    ? value
-                                    : 0
-                            );
-                    },
-                    0
-                );
+        const sum = key =>
+            snapshots.reduce(
+                (total, snapshot) =>
+                    total +
+                    (
+                        Number(
+                            snapshot[key]
+                        ) || 0
+                    ),
+                0
+            );
 
 
         const latest =
-            snapshots
-                .filter(
-                    snapshot =>
-                        Number.isFinite(
-                            Number(snapshot?.timestamp)
-                        )
-                )
-                .sort(
-                    (a, b) =>
-                        Number(a.timestamp) -
-                        Number(b.timestamp)
-                )
-                .at(-1);
+            snapshots[
+                snapshots.length - 1
+            ];
 
 
         return {
 
             avgRealMarketValue:
-                sum("realMarketValue") /
-                count,
+                sum(
+                    "realMarketValue"
+                ) / count,
 
             avgCorrectBuyPrice:
-                sum("correctBuyPrice") /
-                count,
+                sum(
+                    "correctBuyPrice"
+                ) / count,
 
             avgLearnedRatio:
-                sum("learnedRatio") /
-                count,
+                sum(
+                    "learnedRatio"
+                ) / count,
 
             latestW3bBuyPrice:
-                latest?.w3bBuyPrice ?? null,
+                latest.w3bBuyPrice,
 
             latestConfidence:
-                latest?.confidence ?? null,
+                latest.confidence,
 
             latestStatus:
-                latest?.status ?? null,
+                latest.status,
 
             samples:
                 count
@@ -444,7 +470,7 @@ export class History {
 
     /*
      * =========================================================
-     * ARTÍCULOS ACTUALIZADOS RECIENTEMENTE
+     * RECENTLY UPDATED
      * =========================================================
      */
 
