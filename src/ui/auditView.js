@@ -1,160 +1,573 @@
-import { formatMoney, formatPercent, statusBadgeClass } from "./styles.js";
+
+import {
+    formatMoney,
+    formatPercent,
+    statusBadgeClass
+} from "./styles.js";
 
 export const auditView = {
 
-    async render(container, ctx, navigate, params = {}) {
+    async render(
+        container,
+        ctx,
+        navigate,
+        params = {}
+    ) {
 
         if (params.itemId) {
-            return this.renderDetail(container, ctx, navigate, params.itemId);
+
+            return this.renderDetail(
+                container,
+                ctx,
+                navigate,
+                params.itemId
+            );
         }
 
-        return this.renderList(container, ctx, navigate);
+        return this.renderList(
+            container,
+            ctx,
+            navigate
+        );
     },
 
 
-    async renderList(container, ctx, navigate) {
+    /*
+     * =========================================================
+     * LISTA DE AUDITORÍAS
+     * =========================================================
+     */
+
+    async renderList(
+        container,
+        ctx,
+        navigate
+    ) {
 
         container.innerHTML = `
-            <input type="text" class="tw3b-search" id="tw3b-audit-filter"
-                placeholder="🔎 Filtrar por nombre...">
+            <input
+                type="text"
+                class="tw3b-search"
+                id="tw3b-audit-filter"
+                placeholder="🔎 Filtrar por nombre..."
+            >
+
             <div id="tw3b-audit-list">
+
                 <div class="tw3b-skeleton"></div>
                 <div class="tw3b-skeleton"></div>
+
             </div>
         `;
 
-        const audits = await ctx.storage.getAllAudits();
 
-        const order = { RED: 0, YELLOW: 1, GREEN: 2 };
+        let audits;
 
-        const list = Object.values(audits).sort(
-            (a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3)
-        );
+        try {
 
-        const listEl = container.querySelector("#tw3b-audit-list");
+            audits =
+                await ctx.storage.getAllAudits();
 
-        const renderItems = (filterText = "") => {
+        } catch (error) {
 
-            const filtered = filterText
-                ? list.filter(a =>
-                    a.itemName.toLowerCase().includes(filterText.toLowerCase())
-                  )
-                : list;
+            console.error(
+                "[TornW3B] Error cargando auditorías:",
+                error
+            );
 
-            if (filtered.length === 0) {
-                listEl.innerHTML = `
-                    <div class="tw3b-card-sub">
-                        No hay artículos auditados todavía.
-                    </div>
-                `;
-                return;
-            }
+            container.querySelector(
+                "#tw3b-audit-list"
+            ).innerHTML = `
+                <div class="tw3b-error">
+                    No se pudieron cargar las auditorías.
+                </div>
+            `;
 
-            listEl.innerHTML = "";
+            return null;
+        }
 
-            for (const audit of filtered) {
 
-                const card = document.createElement("div");
-                card.className = "tw3b-card";
-                card.innerHTML = `
-                    <div class="tw3b-card-title">
-                        ${escapeHtml(audit.itemName)}
-                        <span class="${statusBadgeClass(audit.status)}">
-                            ${audit.status}
-                        </span>
-                    </div>
-                    <div class="tw3b-card-sub">
-                        ${formatMoney(audit.w3bBuyPrice)} → ${formatMoney(audit.correctBuyPrice)}
-                        · confianza ${audit.confidence}%
-                    </div>
-                `;
-
-                card.addEventListener(
-                    "click",
-                    () => navigate("audit", { itemId: audit.itemId })
-                );
-
-                listEl.appendChild(card);
-            }
+        const order = {
+            RED: 0,
+            YELLOW: 1,
+            GREEN: 2
         };
+
+
+        const list =
+            Object.values(
+                audits || {}
+            )
+            .filter(Boolean)
+            .sort(
+                (a, b) =>
+                    (order[a.status] ?? 3) -
+                    (order[b.status] ?? 3)
+            );
+
+
+        const listEl =
+            container.querySelector(
+                "#tw3b-audit-list"
+            );
+
+
+        const renderItems =
+            (filterText = "") => {
+
+                const normalizedFilter =
+                    String(
+                        filterText
+                    )
+                    .trim()
+                    .toLowerCase();
+
+
+                const filtered =
+                    normalizedFilter
+
+                        ? list.filter(audit =>
+                            String(
+                                audit?.itemName || ""
+                            )
+                            .toLowerCase()
+                            .includes(
+                                normalizedFilter
+                            )
+                        )
+
+                        : list;
+
+
+                if (
+                    filtered.length === 0
+                ) {
+
+                    listEl.innerHTML = `
+                        <div class="tw3b-card-sub">
+                            No hay artículos auditados todavía.
+                        </div>
+                    `;
+
+                    return;
+                }
+
+
+                listEl.innerHTML = "";
+
+
+                for (
+                    const audit
+                    of filtered
+                ) {
+
+                    const card =
+                        document.createElement(
+                            "div"
+                        );
+
+                    card.className =
+                        "tw3b-card";
+
+
+                    const confidence =
+                        Number(
+                            audit.confidence
+                        );
+
+
+                    const confidenceText =
+                        Number.isFinite(
+                            confidence
+                        )
+                            ? `${confidence}%`
+                            : "-";
+
+
+                    card.innerHTML = `
+
+                        <div class="tw3b-card-title">
+
+                            ${escapeHtml(
+                                audit.itemName
+                            )}
+
+                            <span class="${statusBadgeClass(
+                                audit.status
+                            )}">
+                                ${escapeHtml(
+                                    audit.status
+                                )}
+                            </span>
+
+                        </div>
+
+
+                        <div class="tw3b-card-sub">
+
+                            ${formatMoney(
+                                Number(
+                                    audit.w3bBuyPrice
+                                )
+                            )}
+
+                            →
+
+                            ${formatMoney(
+                                Number(
+                                    audit.correctBuyPrice
+                                )
+                            )}
+
+                            · confianza
+                            ${confidenceText}
+
+                        </div>
+                    `;
+
+
+                    card.addEventListener(
+                        "click",
+                        () => {
+
+                            navigate(
+                                "audit",
+                                {
+                                    itemId:
+                                        audit.itemId
+                                }
+                            );
+                        }
+                    );
+
+
+                    listEl.appendChild(
+                        card
+                    );
+                }
+            };
+
 
         renderItems();
 
-        container
-            .querySelector("#tw3b-audit-filter")
-            .addEventListener(
-                "input",
-                (e) => renderItems(e.target.value)
+
+        const filter =
+            container.querySelector(
+                "#tw3b-audit-filter"
             );
+
+
+        filter.addEventListener(
+            "input",
+            event => {
+
+                renderItems(
+                    event.target.value
+                );
+            }
+        );
+
 
         return null;
     },
 
 
-    async renderDetail(container, ctx, navigate, itemId) {
+    /*
+     * =========================================================
+     * DETALLE
+     * =========================================================
+     */
+
+    async renderDetail(
+        container,
+        ctx,
+        navigate,
+        itemId
+    ) {
 
         container.innerHTML = `
             <div class="tw3b-skeleton"></div>
             <div class="tw3b-skeleton"></div>
         `;
 
-        const audit = await ctx.storage.getAudit(itemId);
 
-        if (!audit) {
+        let audit;
+
+        try {
+
+            audit =
+                await ctx.storage.getAudit(
+                    itemId
+                );
+
+        } catch (error) {
+
+            console.error(
+                "[TornW3B] Error obteniendo auditoría:",
+                error
+            );
+
             container.innerHTML = `
                 <div class="tw3b-error">
-                    No hay datos de auditoría para este artículo.
+                    No se pudo cargar la auditoría.
                 </div>
             `;
+
             return null;
         }
 
+
+        if (!audit) {
+
+            container.innerHTML = `
+                <div class="tw3b-error">
+                    No hay datos de auditoría
+                    para este artículo.
+                </div>
+            `;
+
+            return null;
+        }
+
+
+        const confidence =
+            Number(
+                audit.confidence
+            );
+
+
+        const confidenceText =
+            Number.isFinite(
+                confidence
+            )
+                ? `${confidence}%`
+                : "-";
+
+
         container.innerHTML = `
-            <div class="tw3b-card-title">${escapeHtml(audit.itemName)}</div>
 
-            ${row("Item Value", formatMoney(audit.itemValue))}
-            ${row("W3B Buy", formatMoney(audit.w3bBuyPrice))}
-            ${row("Observed W3B", formatPercent(audit.observedRatio))}
-            ${row("Learned W3B", formatPercent(audit.learnedRatio))}
-            ${row("Market Units", audit.totalMarketQuantity)}
-            ${row("Sample", audit.sampleQuantity)}
-            ${row("Weighted Mean", formatMoney(audit.weightedMean))}
-            ${row("Weighted Median", formatMoney(audit.weightedMedian))}
-            ${row("Real Market Value", formatMoney(audit.realMarketValue))}
-            ${row("Correct Buy", formatMoney(audit.correctBuyPrice))}
-            ${row("Difference", formatPercent(audit.differencePercent))}
-            ${row("Confidence", audit.confidence + "%")}
-            ${row("Status", `<span class="${statusBadgeClass(audit.status)}">${audit.status}</span>`)}
+            <div class="tw3b-card-title">
+                ${escapeHtml(
+                    audit.itemName
+                )}
+            </div>
 
-            <button class="tw3b-button" id="tw3b-view-history" style="margin-top: 10px;">
+
+            ${row(
+                "Item Value",
+                formatMoney(
+                    Number(
+                        audit.itemValue
+                    )
+                )
+            )}
+
+
+            ${row(
+                "W3B Buy",
+                formatMoney(
+                    Number(
+                        audit.w3bBuyPrice
+                    )
+                )
+            )}
+
+
+            ${row(
+                "Observed W3B",
+                formatPercent(
+                    Number(
+                        audit.observedRatio
+                    )
+                )
+            )}
+
+
+            ${row(
+                "Learned W3B",
+                formatPercent(
+                    Number(
+                        audit.learnedRatio
+                    )
+                )
+            )}
+
+
+            ${row(
+                "Market Units",
+                formatNumber(
+                    audit.totalMarketQuantity
+                )
+            )}
+
+
+            ${row(
+                "Sample",
+                formatNumber(
+                    audit.sampleQuantity
+                )
+            )}
+
+
+            ${row(
+                "Weighted Mean",
+                formatMoney(
+                    Number(
+                        audit.weightedMean
+                    )
+                )
+            )}
+
+
+            ${row(
+                "Weighted Median",
+                formatMoney(
+                    Number(
+                        audit.weightedMedian
+                    )
+                )
+            )}
+
+
+            ${row(
+                "Real Market Value",
+                formatMoney(
+                    Number(
+                        audit.realMarketValue
+                    )
+                )
+            )}
+
+
+            ${row(
+                "Correct Buy",
+                formatMoney(
+                    Number(
+                        audit.correctBuyPrice
+                    )
+                )
+            )}
+
+
+            ${row(
+                "Difference",
+                formatPercent(
+                    Number(
+                        audit.differencePercent
+                    )
+                )
+            )}
+
+
+            ${row(
+                "Confidence",
+                confidenceText
+            )}
+
+
+            ${row(
+                "Status",
+                `
+                    <span class="${statusBadgeClass(
+                        audit.status
+                    )}">
+                        ${escapeHtml(
+                            audit.status
+                        )}
+                    </span>
+                `
+            )}
+
+
+            <button
+                class="tw3b-button"
+                id="tw3b-view-history"
+                style="margin-top: 10px;"
+            >
                 Ver historial
             </button>
         `;
 
-        container
-            .querySelector("#tw3b-view-history")
-            .addEventListener(
-                "click",
-                () => navigate("history", { itemId: audit.itemId })
+
+        const historyButton =
+            container.querySelector(
+                "#tw3b-view-history"
             );
+
+
+        historyButton.addEventListener(
+            "click",
+            () => {
+
+                navigate(
+                    "history",
+                    {
+                        itemId:
+                            audit.itemId
+                    }
+                );
+            }
+        );
+
 
         return null;
     }
 };
 
 
-function row(label, value) {
+/*
+ * =========================================================
+ * UTILIDADES
+ * =========================================================
+ */
+
+function row(
+    label,
+    value
+) {
+
     return `
         <div class="tw3b-row">
-            <span class="tw3b-row-label">${label}</span>
-            <span>${value}</span>
+
+            <span class="tw3b-row-label">
+                ${escapeHtml(label)}
+            </span>
+
+            <span>
+                ${value}
+            </span>
+
         </div>
     `;
 }
 
 
+function formatNumber(value) {
+
+    const number =
+        Number(value);
+
+    if (
+        !Number.isFinite(number)
+    ) {
+        return "-";
+    }
+
+    return number.toLocaleString(
+        "en-US"
+    );
+}
+
+
 function escapeHtml(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
+
+    const div =
+        document.createElement(
+            "div"
+        );
+
+    div.textContent =
+        String(str ?? "");
+
     return div.innerHTML;
 }

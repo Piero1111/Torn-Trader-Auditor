@@ -1,9 +1,7 @@
 import { CONFIG } from "../config.js";
 
-
 const INVALID_ITEMS_STORAGE_KEY =
     "tornw3b-invalid-items";
-
 
 export class Scheduler {
 
@@ -19,27 +17,63 @@ export class Scheduler {
         this.pricelist = pricelist;
         this.storage = storage;
         this.history = history;
-        this.concurrency = concurrency;
 
-        this.lastAuditByItem = new Map();
+        this.concurrency =
+            Math.max(
+                1,
+                Number(concurrency) || 1
+            );
 
-        this.invalidItems = new Map();
+        /*
+         * itemId → timestamp
+         */
+        this.lastAuditByItem =
+            new Map();
 
+        /*
+         * itemId → información del error
+         */
+        this.invalidItems =
+            new Map();
+
+        /*
+         * Cola:
+         *
+         * [ PRIORIDAD, PRIORIDAD, PASIVA, PASIVA... ]
+         */
         this.queue = [];
+
+        /*
+         * Artículos que están:
+         *
+         * - en cola
+         * - siendo auditados
+         */
+        this.queuedItems =
+            new Set();
 
         this.running = 0;
 
-        this.initialized = false;
+        this.initialized =
+            false;
 
-        this.onAuditComplete = null;
-        this.onAuditError = null;
+        this.intervalHandle =
+            null;
+
+        this.onAuditComplete =
+            null;
+
+        this.onAuditError =
+            null;
     }
 
 
     /*
-     * Carga desde localStorage los artículos
-     * que sabemos que no son auditables.
+     * =========================================================
+     * INVALID ITEMS
+     * =========================================================
      */
+
     loadInvalidItems() {
 
         try {
@@ -56,16 +90,31 @@ export class Scheduler {
             const parsed =
                 JSON.parse(raw);
 
-            if (!parsed || typeof parsed !== "object") {
+            if (
+                !parsed ||
+                typeof parsed !== "object"
+            ) {
                 return;
             }
 
-            for (const [itemId, value] of Object.entries(parsed)) {
+            for (
+                const [itemId, value]
+                of Object.entries(parsed)
+            ) {
 
-                this.invalidItems.set(
-                    Number(itemId),
-                    value
-                );
+                const numericId =
+                    Number(itemId);
+
+                if (
+                    Number.isFinite(numericId) &&
+                    numericId > 0
+                ) {
+
+                    this.invalidItems.set(
+                        numericId,
+                        value
+                    );
+                }
             }
 
         } catch (error) {
@@ -82,14 +131,13 @@ export class Scheduler {
 
         try {
 
-            const data =
-                Object.fromEntries(
-                    this.invalidItems
-                );
-
             localStorage.setItem(
                 INVALID_ITEMS_STORAGE_KEY,
-                JSON.stringify(data)
+                JSON.stringify(
+                    Object.fromEntries(
+                        this.invalidItems
+                    )
+                )
             );
 
         } catch (error) {
@@ -104,12 +152,29 @@ export class Scheduler {
 
     markInvalid(item, error) {
 
+        const itemId =
+            Number(item?.itemId);
+
+        if (
+            !Number.isFinite(itemId) ||
+            itemId <= 0
+        ) {
+            return;
+        }
+
         this.invalidItems.set(
-            Number(item.itemId),
+            itemId,
             {
-                name: item.name,
-                reason: error.message,
-                timestamp: Date.now()
+                name:
+                    item?.name ||
+                    "Artículo desconocido",
+
+                reason:
+                    error?.message ||
+                    "Error desconocido",
+
+                timestamp:
+                    Date.now()
             }
         );
 
@@ -125,74 +190,95 @@ export class Scheduler {
     }
 
 
+    /*
+     * =========================================================
+     * INIT
+     * =========================================================
+     */
+
     async init() {
 
-        /*
-         * Primero recuperamos las auditorías exitosas.
-         */
         const audits =
             await this.storage.getAllAudits();
 
-        for (const itemId in audits) {
+        for (
+            const itemId in audits
+        ) {
 
             const audit =
                 audits[itemId];
 
+            const timestamp =
+                Number(
+                    audit?.timestamp
+                );
+
             if (
-                audit &&
-                Number.isFinite(
-                    Number(audit.timestamp)
-                )
+                Number.isFinite(timestamp) &&
+                timestamp > 0
             ) {
 
                 this.lastAuditByItem.set(
                     Number(itemId),
-                    Number(audit.timestamp)
+                    timestamp
                 );
             }
         }
 
 
-        /*
-         * Luego recuperamos los artículos
-         * permanentemente inválidos.
-         */
         this.loadInvalidItems();
 
-        this.initialized = true;
+        this.initialized =
+            true;
 
 
         console.log(
-            `[Scheduler] ${this.invalidItems.size} artículos descartados cargados`
+            `[Scheduler] Inicializado: ` +
+            `${this.lastAuditByItem.size} auditorías cacheadas, ` +
+            `${this.invalidItems.size} artículos inválidos.`
         );
     }
 
+
+    /*
+     * =========================================================
+     * NEEDS AUDIT
+     * =========================================================
+     */
 
     needsAudit(itemId) {
 
         const numericId =
             Number(itemId);
 
-
-        /*
-         * Si ya sabemos que no es un artículo
-         * auditable, jamás lo volvemos a meter
-         * en la cola automática.
-         */
-        if (this.isInvalid(numericId)) {
+        if (
+            !Number.isFinite(numericId) ||
+            numericId <= 0
+        ) {
             return false;
         }
 
+        if (
+            this.isInvalid(numericId)
+        ) {
+            return false;
+        }
 
         const last =
-            this.lastAuditByItem.get(numericId);
+            this.lastAuditByItem.get(
+                numericId
+            );
 
-
+        /*
+         * Nunca auditado.
+         */
         if (!last) {
             return true;
         }
 
-
+        /*
+         * Ya pasó el intervalo.
+         */
         return (
             Date.now() - last >=
             CONFIG.AUDIT_INTERVAL
@@ -200,23 +286,54 @@ export class Scheduler {
     }
 
 
+    /*
+     * =========================================================
+     * SEARCH → CACHE OR PRIORITY AUDIT
+     * =========================================================
+     */
+
     async getOrAudit(item) {
 
+        if (!item) {
+            return null;
+        }
+
+        const itemId =
+            Number(item.itemId);
+
+        if (
+            !Number.isFinite(itemId) ||
+            itemId <= 0
+        ) {
+
+            throw new Error(
+                "Artículo sin ID válido"
+            );
+        }
+
+
         /*
-         * Un artículo inválido no debe generar
-         * una petición nuevamente.
+         * Nunca volver a consultar
+         * artículos descartados.
          */
-        if (this.isInvalid(item.itemId)) {
+        if (
+            this.isInvalid(itemId)
+        ) {
 
             return null;
         }
 
 
-        if (!this.needsAudit(item.itemId)) {
+        /*
+         * Primero intentamos cache.
+         */
+        if (
+            !this.needsAudit(itemId)
+        ) {
 
             const cached =
                 await this.storage.getAudit(
-                    item.itemId
+                    itemId
                 );
 
             if (cached) {
@@ -225,167 +342,413 @@ export class Scheduler {
         }
 
 
-        return this.auditPriority(item);
+        /*
+         * Necesita auditoría.
+         *
+         * Se coloca como PRIORIDAD.
+         */
+        return this.auditPriority(
+            item
+        );
     }
 
+
+    /*
+     * =========================================================
+     * PRIORITY AUDIT
+     * =========================================================
+     */
 
     auditPriority(item) {
 
-        /*
-         * Evita duplicar el mismo artículo
-         * en la cola.
-         */
-        if (this.isInvalid(item.itemId)) {
+        return new Promise(
+            (resolve, reject) => {
 
-            return Promise.reject(
-                new Error(
-                    `Artículo descartado: ${item.name}`
-                )
-            );
-        }
+                const itemId =
+                    Number(item?.itemId);
 
 
-        return new Promise((resolve, reject) => {
+                if (
+                    !Number.isFinite(itemId) ||
+                    itemId <= 0
+                ) {
 
-            this.queue.unshift({
+                    reject(
+                        new Error(
+                            "Artículo sin ID válido"
+                        )
+                    );
 
-                item,
+                    return;
+                }
 
-                priority: true,
 
-                resolve,
+                if (
+                    this.isInvalid(itemId)
+                ) {
 
-                reject
+                    resolve(null);
+                    return;
+                }
 
-            });
 
-            this.drain();
-        });
+                /*
+                 * Si ya está siendo procesado,
+                 * simplemente nos agregamos como
+                 * otro waiter.
+                 */
+                const existing =
+                    this.queue.find(
+                        queued =>
+                            Number(
+                                queued.item.itemId
+                            ) === itemId
+                    );
+
+
+                if (existing) {
+
+                    existing.priority =
+                        true;
+
+                    existing.waiters.push({
+                        resolve,
+                        reject
+                    });
+
+
+                    /*
+                     * Reordenamos para que
+                     * quede antes que las pasivas.
+                     */
+                    this.promotePriority(
+                        existing
+                    );
+
+                    this.drain();
+
+                    return;
+                }
+
+
+                /*
+                 * Puede estar ejecutándose.
+                 *
+                 * En ese caso queuedItems ya
+                 * contiene el ID, pero no existe
+                 * en queue.
+                 *
+                 * Buscamos la ejecución actual.
+                 */
+                if (
+                    this.queuedItems.has(itemId)
+                ) {
+
+                    /*
+                     * La auditoría ya está en
+                     * progreso. Esperamos a que
+                     * termine mediante una entrada
+                     * especial de espera.
+                     */
+
+                    const runningEntry = {
+                        item,
+                        priority: true,
+                        waiters: [
+                            {
+                                resolve,
+                                reject
+                            }
+                        ],
+                        running: true
+                    };
+
+                    /*
+                     * No añadimos otra auditoría.
+                     * Simplemente esperamos.
+                     */
+                    this.runningWaiters =
+                        this.runningWaiters ||
+                        new Map();
+
+                    if (
+                        !this.runningWaiters.has(
+                            itemId
+                        )
+                    ) {
+
+                        this.runningWaiters.set(
+                            itemId,
+                            []
+                        );
+                    }
+
+                    this.runningWaiters
+                        .get(itemId)
+                        .push({
+                            resolve,
+                            reject
+                        });
+
+                    return;
+                }
+
+
+                /*
+                 * Nueva auditoría prioritaria.
+                 */
+                const queued = {
+
+                    item,
+
+                    priority: true,
+
+                    waiters: [
+                        {
+                            resolve,
+                            reject
+                        }
+                    ]
+                };
+
+
+                /*
+                 * SIEMPRE al frente.
+                 */
+                this.queue.unshift(
+                    queued
+                );
+
+                this.queuedItems.add(
+                    itemId
+                );
+
+                this.drain();
+            }
+        );
     }
 
+
+    /*
+     * Promueve una tarea existente
+     * al frente de la cola.
+     */
+
+    promotePriority(queued) {
+
+        const index =
+            this.queue.indexOf(
+                queued
+            );
+
+        if (index > 0) {
+
+            this.queue.splice(
+                index,
+                1
+            );
+
+            this.queue.unshift(
+                queued
+            );
+        }
+    }
+
+
+    /*
+     * =========================================================
+     * PASSIVE AUDIT
+     * =========================================================
+     */
 
     async enqueueDueItems() {
 
-        const items =
-            await this.pricelist.getAll();
+        try {
+
+            const items =
+                await this.pricelist.getAll();
 
 
-        /*
-         * Solo artículos:
-         *
-         * - con ID numérico
-         * - con nombre
-         * - con precio de compra válido
-         * - que no estén descartados
-         * - que necesiten auditoría
-         */
-        const due =
-            items.filter(item => {
+            if (
+                !Array.isArray(items) ||
+                items.length === 0
+            ) {
+
+                return 0;
+            }
+
+
+            const due = [];
+
+
+            for (
+                const item of items
+            ) {
 
                 if (!item) {
-                    return false;
+                    continue;
                 }
 
-                if (
-                    !Number.isFinite(
-                        Number(item.itemId)
-                    )
-                ) {
-                    return false;
-                }
 
+                const itemId =
+                    Number(item.itemId);
+
+                const buyPrice =
+                    Number(item.buyPrice);
+
+
+                /*
+                 * Datos inválidos.
+                 */
                 if (
+                    !Number.isFinite(itemId) ||
+                    itemId <= 0 ||
                     typeof item.name !== "string" ||
-                    !item.name.trim()
+                    !item.name.trim() ||
+                    !Number.isFinite(buyPrice) ||
+                    buyPrice <= 0
                 ) {
-                    return false;
+                    continue;
                 }
+
+
+                /*
+                 * Nunca tocar inválidos.
+                 */
+                if (
+                    this.isInvalid(itemId)
+                ) {
+                    continue;
+                }
+
+
+                /*
+                 * Evitar duplicados.
+                 */
+                if (
+                    this.queuedItems.has(itemId)
+                ) {
+                    continue;
+                }
+
 
                 if (
-                    !Number.isFinite(
-                        Number(item.buyPrice)
-                    ) ||
-                    Number(item.buyPrice) <= 0
+                    this.needsAudit(itemId)
                 ) {
-                    return false;
-                }
 
-                if (
-                    this.isInvalid(item.itemId)
-                ) {
-                    return false;
+                    due.push(item);
                 }
+            }
 
-                return this.needsAudit(
-                    item.itemId
+
+            /*
+             * Solo unos pocos por ciclo.
+             */
+            const PASSIVE_BATCH_SIZE =
+                5;
+
+
+            const batch =
+                due.slice(
+                    0,
+                    PASSIVE_BATCH_SIZE
                 );
-            });
 
 
-        /*
-         * IMPORTANTE:
-         *
-         * No metemos los 1060 artículos
-         * de golpe en la cola.
-         *
-         * Procesamos progresivamente.
-         */
-        const INITIAL_BATCH_SIZE = 10;
+            for (
+                const item of batch
+            ) {
 
-        const batch =
-            due.slice(
-                0,
-                INITIAL_BATCH_SIZE
+                const itemId =
+                    Number(item.itemId);
+
+
+                this.queue.push({
+
+                    item,
+
+                    priority: false,
+
+                    waiters: []
+                });
+
+
+                this.queuedItems.add(
+                    itemId
+                );
+            }
+
+
+            if (
+                batch.length > 0
+            ) {
+
+                console.log(
+                    `[Scheduler] Auditoría pasiva: ` +
+                    `${batch.length} añadidos. ` +
+                    `Pendientes: ${due.length}`
+                );
+            }
+
+
+            this.drain();
+
+            return batch.length;
+
+        } catch (error) {
+
+            console.error(
+                "[Scheduler] Error preparando auditoría pasiva:",
+                error
             );
 
-
-        for (const item of batch) {
-
-            this.queue.push({
-                item,
-                priority: false
-            });
+            return 0;
         }
-
-
-        if (batch.length > 0) {
-
-            console.log(
-                `[Scheduler] ${batch.length} artículos añadidos a la cola ` +
-                `(pendientes: ${Math.max(0, due.length - batch.length)})`
-            );
-        }
-
-
-        this.drain();
-
-        return batch.length;
     }
 
+
+    /*
+     * =========================================================
+     * QUEUE
+     * =========================================================
+     */
 
     drain() {
 
         while (
             this.running <
-            this.concurrency &&
+                this.concurrency &&
             this.queue.length > 0
         ) {
 
-            const next =
+            /*
+             * Como las prioridades están
+             * al frente, siempre salen primero.
+             */
+            const queued =
                 this.queue.shift();
 
-            this.runAudit(next);
+
+            this.runAudit(
+                queued
+            );
         }
     }
 
 
+    /*
+     * =========================================================
+     * RUN AUDIT
+     * =========================================================
+     */
+
     async runAudit(queued) {
 
-        const {
-            item,
-            resolve,
-            reject
-        } = queued;
+        const item =
+            queued.item;
+
+        const itemId =
+            Number(item.itemId);
 
 
         this.running++;
@@ -394,40 +757,104 @@ export class Scheduler {
         try {
 
             /*
-             * Protección adicional:
-             * por si fue invalidado mientras
-             * esperaba en la cola.
+             * Si fue marcado inválido
+             * mientras esperaba.
              */
-            if (this.isInvalid(item.itemId)) {
+            if (
+                this.isInvalid(itemId)
+            ) {
 
-                if (reject) {
-                    reject(
-                        new Error(
-                            `Artículo descartado: ${item.name}`
-                        )
+                const error =
+                    new Error(
+                        `Artículo descartado: ${item.name}`
                     );
-                }
+
+                this.resolveWaiters(
+                    queued,
+                    null,
+                    error
+                );
 
                 return;
             }
 
 
+            /*
+             * Puede haber sido auditado
+             * mientras esperaba.
+             */
+            if (
+                !this.needsAudit(itemId)
+            ) {
+
+                const cached =
+                    await this.storage.getAudit(
+                        itemId
+                    );
+
+
+                if (cached) {
+
+                    this.resolveWaiters(
+                        queued,
+                        cached,
+                        null
+                    );
+
+                    return;
+                }
+            }
+
+
+            console.log(
+                `[Scheduler] Auditando ${item.name} (${itemId})`
+            );
+
+
             const result =
-                await this.auditor.audit(item);
+                await this.auditor.audit(
+                    item
+                );
 
 
-            await this.history.recordSnapshot(
+            /*
+             * Guardar historial.
+             */
+            if (
+                result &&
+                this.history
+            ) {
+
+                await this.history.recordSnapshot(
+                    result
+                );
+            }
+
+
+            /*
+             * Actualizar timestamp.
+             */
+            if (
+                result &&
+                Number.isFinite(
+                    Number(result.timestamp)
+                )
+            ) {
+
+                this.lastAuditByItem.set(
+                    itemId,
+                    Number(result.timestamp)
+                );
+            }
+
+
+            /*
+             * Avisar a App.
+             */
+            if (
+                this.onAuditComplete &&
                 result
-            );
-
-
-            this.lastAuditByItem.set(
-                item.itemId,
-                result.timestamp
-            );
-
-
-            if (this.onAuditComplete) {
+            ) {
 
                 this.onAuditComplete(
                     result
@@ -435,27 +862,30 @@ export class Scheduler {
             }
 
 
-            if (resolve) {
-                resolve(result);
-            }
+            this.resolveWaiters(
+                queued,
+                result,
+                null
+            );
+
+
+            /*
+             * Resolver también cualquier
+             * búsqueda que se hubiera unido
+             * mientras estaba ejecutándose.
+             */
+            this.resolveRunningWaiters(
+                itemId,
+                result,
+                null
+            );
 
 
         } catch (error) {
 
-            /*
-             * Errores permanentes.
-             *
-             * Estos NO deben volver a intentarse
-             * automáticamente después de recargar.
-             */
             if (
-                error?.code === "INVALID_ID" ||
-                error?.message === "Incorrect ID" ||
-                error?.message?.startsWith(
-                    "Item Value inválido"
-                ) ||
-                error?.message?.startsWith(
-                    "No se pudo obtener Item Value"
+                this.isPermanentError(
+                    error
                 )
             ) {
 
@@ -464,19 +894,18 @@ export class Scheduler {
                     error
                 );
 
+
                 console.warn(
-                    `[TornW3B] ${item.name} descartado permanentemente: ${error.message}`
+                    `[TornW3B] ${item.name} ` +
+                    `descartado permanentemente: ` +
+                    `${error.message}`
                 );
 
             } else {
 
-                /*
-                 * Errores temporales:
-                 * NO los marcamos como inválidos.
-                 *
-                 * Podrán reintentarse en otro ciclo.
-                 */
-                if (this.onAuditError) {
+                if (
+                    this.onAuditError
+                ) {
 
                     this.onAuditError(
                         item,
@@ -493,59 +922,229 @@ export class Scheduler {
             }
 
 
-            if (reject) {
-                reject(error);
-            }
+            this.resolveWaiters(
+                queued,
+                null,
+                error
+            );
+
+
+            this.resolveRunningWaiters(
+                itemId,
+                null,
+                error
+            );
+
 
         } finally {
 
+            this.queuedItems.delete(
+                itemId
+            );
+
             this.running--;
 
-            /*
-             * Continuar procesando la cola.
-             */
             this.drain();
         }
     }
 
 
+    /*
+     * =========================================================
+     * WAITERS
+     * =========================================================
+     */
+
+    resolveWaiters(
+        queued,
+        result,
+        error
+    ) {
+
+        for (
+            const waiter
+            of queued.waiters || []
+        ) {
+
+            try {
+
+                if (error) {
+
+                    waiter.reject(
+                        error
+                    );
+
+                } else {
+
+                    waiter.resolve(
+                        result
+                    );
+                }
+
+            } catch {
+                // No permitir que un waiter
+                // rompa el Scheduler.
+            }
+        }
+    }
+
+
+    resolveRunningWaiters(
+        itemId,
+        result,
+        error
+    ) {
+
+        if (
+            !this.runningWaiters
+        ) {
+            return;
+        }
+
+
+        const waiters =
+            this.runningWaiters.get(
+                itemId
+            );
+
+
+        if (!waiters) {
+            return;
+        }
+
+
+        this.runningWaiters.delete(
+            itemId
+        );
+
+
+        for (
+            const waiter of waiters
+        ) {
+
+            try {
+
+                if (error) {
+
+                    waiter.reject(
+                        error
+                    );
+
+                } else {
+
+                    waiter.resolve(
+                        result
+                    );
+                }
+
+            } catch {
+                // Ignorar errores externos.
+            }
+        }
+    }
+
+
+    /*
+     * =========================================================
+     * PERMANENT ERRORS
+     * =========================================================
+     */
+
+    isPermanentError(error) {
+
+        const message =
+            String(
+                error?.message || ""
+            );
+
+
+        return (
+            error?.code ===
+                "INVALID_ID" ||
+
+            message ===
+                "Incorrect ID" ||
+
+            message.startsWith(
+                "Item Value inválido"
+            ) ||
+
+            message.startsWith(
+                "No se pudo obtener Item Value"
+            ) ||
+
+            message.startsWith(
+                "Artículo sin ID válido"
+            )
+        );
+    }
+
+
+    /*
+     * =========================================================
+     * START / STOP
+     * =========================================================
+     */
+
     start() {
 
-        if (!this.initialized) {
+        if (
+            !this.initialized
+        ) {
 
             console.warn(
-                "[Scheduler] start() llamado sin init() previo."
+                "[Scheduler] start() llamado sin init()."
             );
         }
 
 
         /*
-         * Primera tanda.
+         * Auditoría pasiva inicial.
+         *
+         * No bloquea la interfaz.
          */
         this.enqueueDueItems();
 
 
         /*
-         * Cada hora solamente se añade
-         * otra pequeña tanda.
+         * Cada hora se busca otra
+         * pequeña tanda de artículos
+         * que hayan vencido.
          */
         this.intervalHandle =
             setInterval(
-                () => this.enqueueDueItems(),
+                () => {
+
+                    this.enqueueDueItems();
+
+                },
                 CONFIG.AUDIT_INTERVAL
             );
+
+
+        console.log(
+            "[Scheduler] Auditoría pasiva iniciada."
+        );
     }
 
 
     stop() {
 
-        if (this.intervalHandle) {
+        if (
+            this.intervalHandle
+        ) {
 
             clearInterval(
                 this.intervalHandle
             );
 
-            this.intervalHandle = null;
+            this.intervalHandle =
+                null;
         }
+
+
+        console.log(
+            "[Scheduler] Auditoría pasiva detenida."
+        );
     }
 }

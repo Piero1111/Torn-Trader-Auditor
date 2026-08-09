@@ -15,6 +15,8 @@ export const CONFIG = {
         60 * 60 * 1000,
 
 
+    AUDIT_BATCH_SIZE:
+        10,
     SAMPLE_PERCENTAGE:
         0.10,
 

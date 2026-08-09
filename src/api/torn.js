@@ -1,37 +1,51 @@
+
 import { CONFIG } from "../config.js";
+
 
 export class TornAPI {
 
     constructor(apiKey) {
+
         this.apiKey = apiKey;
 
         /*
-         * Todas las peticiones pasan por esta cola.
+         * Cola global de solicitudes.
          *
-         * Importante:
-         * el retry NO vuelve a entrar en la cola.
-         * Se ejecuta dentro de la misma tarea.
+         * TODAS las peticiones pasan por aquí.
          */
-        this.requestQueue = Promise.resolve();
+        this.requestQueue =
+            Promise.resolve();
+
 
         /*
-         * Una petición por segundo como máximo.
+         * Intervalo mínimo entre peticiones.
          *
-         * Esto es deliberadamente conservador porque
-         * cada auditoría necesita dos endpoints:
-         *
-         * /torn/{id}/items
-         * /market/{id}/itemmarket
+         * 1000 ms = máximo aproximado
+         * de 1 petición por segundo.
          */
-        this.minRequestInterval = 1000;
+        this.minRequestInterval =
+            1000;
 
-        this.lastRequestTime = 0;
 
-        this.maxRetries = 4;
+        this.lastRequestTime =
+            0;
+
+
+        /*
+         * Máximo de reintentos para
+         * rate limit.
+         */
+        this.maxRetries =
+            4;
     }
 
 
+    /* =========================================================
+     * UTILIDADES
+     * ========================================================= */
+
     sleep(ms) {
+
         return new Promise(resolve =>
             setTimeout(resolve, ms)
         );
@@ -40,237 +54,338 @@ export class TornAPI {
 
     async waitForRateLimit() {
 
-        const now = Date.now();
+        const now =
+            Date.now();
 
         const elapsed =
             now - this.lastRequestTime;
 
         const remaining =
-            this.minRequestInterval - elapsed;
+            this.minRequestInterval -
+            elapsed;
+
 
         if (remaining > 0) {
-            await this.sleep(remaining);
+
+            await this.sleep(
+                remaining
+            );
         }
 
-        this.lastRequestTime = Date.now();
+
+        /*
+         * Registramos el momento en que
+         * vamos a realizar la petición.
+         */
+        this.lastRequestTime =
+            Date.now();
     }
 
+
+    /* =========================================================
+     * COLA GLOBAL
+     * ========================================================= */
 
     enqueueRequest(requestFn) {
 
         const execute =
-            this.requestQueue.then(requestFn);
+            this.requestQueue.then(
+                requestFn
+            );
+
 
         /*
-         * La cola continúa aunque una petición falle.
+         * La cola debe continuar aunque
+         * esta solicitud falle.
          */
         this.requestQueue =
             execute.catch(() => {});
+
 
         return execute;
     }
 
 
+    /* =========================================================
+     * REQUEST
+     * ========================================================= */
+
     async request(path) {
 
-        return this.enqueueRequest(async () => {
+        return this.enqueueRequest(
+            async () => {
 
-            let lastError = null;
+                let lastError =
+                    null;
 
-            for (
-                let retry = 0;
-                retry <= this.maxRetries;
-                retry++
-            ) {
 
-                await this.waitForRateLimit();
-
-                try {
-
-                    const data =
-                        await this.performRequest(path);
-
-                    return data;
-
-                } catch (error) {
-
-                    lastError = error;
+                for (
+                    let retry = 0;
+                    retry <= this.maxRetries;
+                    retry++
+                ) {
 
                     /*
-                     * Solo reintentamos rate limits.
+                     * Esperar el intervalo normal
+                     * antes de CADA petición real.
                      */
-                    if (
-                        error?.code !== "RATE_LIMIT"
-                    ) {
-                        throw error;
-                    }
+                    await this.waitForRateLimit();
 
 
-                    if (retry >= this.maxRetries) {
-                        throw new Error(
-                            "Too many requests"
+                    try {
+
+                        return await this.performRequest(
+                            path
+                        );
+
+                    } catch (error) {
+
+                        lastError =
+                            error;
+
+
+                        /*
+                         * Solo hacemos retry
+                         * si Torn indica rate limit.
+                         */
+                        if (
+                            error?.code !==
+                            "RATE_LIMIT"
+                        ) {
+
+                            throw error;
+                        }
+
+
+                        if (
+                            retry >=
+                            this.maxRetries
+                        ) {
+
+                            throw new Error(
+                                "Too many requests"
+                            );
+                        }
+
+
+                        /*
+                         * Backoff progresivo.
+                         *
+                         * 1s
+                         * 2s
+                         * 4s
+                         * 8s
+                         */
+                        const delay =
+                            1000 *
+                            Math.pow(
+                                2,
+                                retry
+                            );
+
+
+                        console.warn(
+                            `[TornAPI] Rate limit. ` +
+                            `Reintentando en ${delay}ms ` +
+                            `(intento ${retry + 1}/${this.maxRetries})`
+                        );
+
+
+                        await this.sleep(
+                            delay
                         );
                     }
-
-
-                    const delay =
-                        1000 * Math.pow(2, retry);
-
-                    console.warn(
-                        `[TornAPI] Rate limit. ` +
-                        `Reintentando en ${delay}ms ` +
-                        `(intento ${retry + 1}/${this.maxRetries})`
-                    );
-
-                    await this.sleep(delay);
                 }
-            }
 
-            throw lastError ||
-                new Error("Torn API error");
-        });
+
+                throw (
+                    lastError ||
+                    new Error(
+                        "Torn API error"
+                    )
+                );
+            }
+        );
     }
 
+
+    /* =========================================================
+     * PETICIÓN REAL
+     * ========================================================= */
 
     performRequest(path) {
 
         const separator =
-            path.includes("?") ? "&" : "?";
+            path.includes("?")
+                ? "&"
+                : "?";
+
 
         const url =
             `${CONFIG.TORN_API_BASE}${path}` +
-            `${separator}key=${encodeURIComponent(this.apiKey)}`;
+            `${separator}key=` +
+            encodeURIComponent(
+                this.apiKey
+            );
 
 
-        return new Promise((resolve, reject) => {
+        return new Promise(
+            (resolve, reject) => {
 
-            GM_xmlhttpRequest({
+                GM_xmlhttpRequest({
 
-                method: "GET",
+                    method: "GET",
 
-                url,
+                    url,
 
-                timeout: 30000,
+                    timeout: 30000,
 
 
-                onload: (response) => {
+                    onload: (response) => {
 
-                    let data = null;
+                        let data =
+                            null;
 
-                    try {
 
-                        data =
-                            JSON.parse(
-                                response.responseText
+                        try {
+
+                            data =
+                                JSON.parse(
+                                    response.responseText
+                                );
+
+                        } catch {
+
+                            reject(
+                                new Error(
+                                    "Respuesta inválida de Torn API"
+                                )
                             );
 
-                    } catch {
-
-                        reject(
-                            new Error(
-                                "Respuesta inválida de Torn API"
-                            )
-                        );
-
-                        return;
-                    }
-
-
-                    /*
-                     * Rate limit.
-                     */
-                    if (
-                        data?.error?.error ===
-                        "Too many requests"
-                    ) {
-
-                        const error =
-                            new Error(
-                                "Too many requests"
-                            );
-
-                        error.code =
-                            "RATE_LIMIT";
-
-                        reject(error);
-
-                        return;
-                    }
-
-
-                    /*
-                     * Otros errores HTTP.
-                     */
-                    if (
-                        response.status < 200 ||
-                        response.status >= 300
-                    ) {
-
-                        reject(
-                            new Error(
-                                `Torn API HTTP ${response.status}`
-                            )
-                        );
-
-                        return;
-                    }
-
-
-                    /*
-                     * Error devuelto por Torn.
-                     */
-                    if (data?.error) {
-
-                        const error =
-                            new Error(
-                                data.error.error ||
-                                "Torn API error"
-                            );
-
-                        /*
-                         * Marcamos específicamente
-                         * los errores que son permanentes.
-                         */
-                        if (
-                            data.error.error ===
-                            "Incorrect ID"
-                        ) {
-                            error.code = "INVALID_ID";
+                            return;
                         }
 
-                        reject(error);
 
-                        return;
+                        /* -----------------------------------------
+                         * RATE LIMIT
+                         * ----------------------------------------- */
+
+                        if (
+                            data?.error?.error ===
+                            "Too many requests"
+                        ) {
+
+                            const error =
+                                new Error(
+                                    "Too many requests"
+                                );
+
+
+                            error.code =
+                                "RATE_LIMIT";
+
+
+                            reject(
+                                error
+                            );
+
+                            return;
+                        }
+
+
+                        /* -----------------------------------------
+                         * HTTP ERROR
+                         * ----------------------------------------- */
+
+                        if (
+                            response.status < 200 ||
+                            response.status >= 300
+                        ) {
+
+                            reject(
+                                new Error(
+                                    `Torn API HTTP ${response.status}`
+                                )
+                            );
+
+                            return;
+                        }
+
+
+                        /* -----------------------------------------
+                         * TORN API ERROR
+                         * ----------------------------------------- */
+
+                        if (
+                            data?.error
+                        ) {
+
+                            const error =
+                                new Error(
+                                    data.error.error ||
+                                    "Torn API error"
+                                );
+
+
+                            /*
+                             * ID inexistente.
+                             */
+                            if (
+                                data.error.error ===
+                                "Incorrect ID"
+                            ) {
+
+                                error.code =
+                                    "INVALID_ID";
+                            }
+
+
+                            reject(
+                                error
+                            );
+
+                            return;
+                        }
+
+
+                        /* -----------------------------------------
+                         * SUCCESS
+                         * ----------------------------------------- */
+
+                        resolve(
+                            data
+                        );
+                    },
+
+
+                    onerror: () => {
+
+                        reject(
+                            new Error(
+                                "No se pudo conectar con Torn API"
+                            )
+                        );
+                    },
+
+
+                    ontimeout: () => {
+
+                        reject(
+                            new Error(
+                                "Timeout conectando con Torn API"
+                            )
+                        );
                     }
 
-
-                    resolve(data);
-                },
-
-
-                onerror: () => {
-
-                    reject(
-                        new Error(
-                            "No se pudo conectar con Torn API"
-                        )
-                    );
-                },
-
-
-                ontimeout: () => {
-
-                    reject(
-                        new Error(
-                            "Timeout conectando con Torn API"
-                        )
-                    );
-                }
-
-            });
-        });
+                });
+            }
+        );
     }
 
+
+    /* =========================================================
+     * ENDPOINTS
+     * ========================================================= */
 
     async getItem(itemId) {
 
@@ -295,3 +410,4 @@ export class TornAPI {
         );
     }
 }
+

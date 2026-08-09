@@ -1,145 +1,217 @@
-import { formatMoney, formatPercent } from "./styles.js";
+import {
+    formatMoney,
+    formatPercent
+} from "./styles.js";
+
 
 export const saleView = {
 
-    async render(container, ctx, navigate, params = {}) {
+    async render(
+        container,
+        ctx,
+        navigate,
+        params = {}
+    ) {
 
-        const item = params.item;
+        const item =
+            params.item;
+
+        /*
+         * La auditoría ya fue obtenida por App
+         * mediante Scheduler.getOrAudit().
+         */
+        const audit =
+            params.audit;
+
 
         if (!item) {
+
             container.innerHTML = `
                 <div class="tw3b-error">
                     Buscá un artículo desde el menú principal primero.
                 </div>
             `;
+
             return null;
         }
 
-        container.innerHTML = `
-            <div class="tw3b-skeleton"></div>
-            <div class="tw3b-skeleton"></div>
-        `;
-
-        /*
-         * W3B % requiere Item Value de Torn.
-         * Este valor se obtiene de una auditoría previa.
-         */
-        const audit =
-            await ctx.storage.getAudit(item.itemId);
 
         if (!audit) {
+
             container.innerHTML = `
                 <div class="tw3b-card-title">
                     ${escapeHtml(item.name)}
                 </div>
 
                 <div class="tw3b-error">
-                    Este artículo todavía no fue auditado — no se puede
-                    calcular el % W3B sin el Item Value de Torn.
+                    No se recibió información de auditoría.
                 </div>
             `;
 
             return null;
         }
 
+
         /*
-         * ============================================================
+         * Verificación de seguridad.
+         */
+
+        if (
+            !Number.isFinite(
+                Number(audit.itemValue)
+            ) ||
+            Number(audit.itemValue) <= 0
+        ) {
+
+            container.innerHTML = `
+                <div class="tw3b-card-title">
+                    ${escapeHtml(item.name)}
+                </div>
+
+                <div class="tw3b-error">
+                    Torn no devolvió un Item Value válido para este artículo.
+                </div>
+            `;
+
+            return null;
+        }
+
+
+        const itemValue =
+            Number(audit.itemValue);
+
+
+        /*
+         * =====================================================
          * W3B %
-         * ============================================================
+         * =====================================================
+         *
+         * Buy Price / Item Value
          *
          * Ejemplo:
          *
-         * W3B Buy Price = 25,554
-         * Item Value    = 26,075
+         * Buy Price = 25.554
+         * Item Value = 26.075
          *
-         * W3B % = 25,554 / 26,075
-         *       ≈ 0.98
-         *       = 98%
+         * W3B % ≈ 98%
          */
+
         const w3bPercent =
-            item.buyPrice / audit.itemValue;
+            Number(item.buyPrice) /
+            itemValue;
+
 
         /*
-         * ============================================================
-         * DESCUENTO W3B
-         * ============================================================
-         *
-         * NO debemos dividir w3bPercent entre 2.
-         *
-         * Si W3B paga 98%:
-         *
-         * 100% - 98% = 2% de descuento
+         * Descuento respecto al Item Value.
          */
-        const w3bDiscount =
+
+        const discountPercent =
             1 - w3bPercent;
 
+
         /*
-         * ============================================================
+         * =====================================================
          * SELL %
-         * ============================================================
+         * =====================================================
          *
-         * Queremos recuperar solamente la mitad del descuento.
+         * Se divide el DESCUENTO entre 2.
          *
-         * W3B descuento = 2%
-         * Mitad          = 1%
+         * Ejemplo:
          *
-         * Sell % = 100% - 1%
-         *        = 99%
+         * W3B = 98%
+         * descuento = 2%
+         *
+         * 2% / 2 = 1%
+         *
+         * Sell % = 99%
          */
+
         const sellDiscount =
-            w3bDiscount / 2;
+            discountPercent / 2;
+
 
         const sellPercent =
             1 - sellDiscount;
 
+
         /*
-         * Precio de venta basado en el Item Value de Torn.
+         * Precio de venta.
          */
+
         const sellPrice =
-            audit.itemValue * sellPercent;
+            itemValue *
+            sellPercent;
+
+
+        /*
+         * =====================================================
+         * RENDER
+         * =====================================================
+         */
 
         container.innerHTML = `
+
             <div class="tw3b-card-title">
                 ${escapeHtml(item.name)}
             </div>
+
 
             <div class="tw3b-row">
                 <span class="tw3b-row-label">
                     W3B Buy Price
                 </span>
+
                 <span>
                     ${formatMoney(item.buyPrice)}
                 </span>
             </div>
 
+
+            <div class="tw3b-row">
+                <span class="tw3b-row-label">
+                    Item Value
+                </span>
+
+                <span>
+                    ${formatMoney(itemValue)}
+                </span>
+            </div>
+
+
             <div class="tw3b-row">
                 <span class="tw3b-row-label">
                     W3B %
                 </span>
+
                 <span>
                     ${formatPercent(w3bPercent)}
-                    (-${formatPercent(w3bDiscount)})
+                    (${formatPercent(-discountPercent)})
                 </span>
             </div>
+
 
             <div class="tw3b-row">
                 <span class="tw3b-row-label">
                     Sell %
                 </span>
+
                 <span>
                     ${formatPercent(sellPercent)}
-                    (-${formatPercent(sellDiscount)})
+                    (${formatPercent(-sellDiscount)})
                 </span>
             </div>
+
 
             <div class="tw3b-row">
                 <span class="tw3b-row-label">
                     Sell Price
                 </span>
+
                 <span>
                     ${formatMoney(sellPrice)}
                 </span>
             </div>
+
 
             <button
                 class="tw3b-button"
@@ -150,41 +222,79 @@ export const saleView = {
             </button>
         `;
 
+
+        /*
+         * =====================================================
+         * COPIAR PRECIO
+         * =====================================================
+         */
+
         const copyBtn =
-            container.querySelector("#tw3b-copy-sell");
+            container.querySelector(
+                "#tw3b-copy-sell"
+            );
 
-        copyBtn.addEventListener("click", async () => {
 
-            try {
+        if (copyBtn) {
 
-                await navigator.clipboard.writeText(
-                    String(Math.round(sellPrice))
-                );
+            copyBtn.addEventListener(
+                "click",
+                async () => {
 
-                copyBtn.textContent = "Copiado ✓";
+                    try {
 
-            } catch {
+                        await navigator.clipboard.writeText(
+                            String(
+                                Math.round(
+                                    sellPrice
+                                )
+                            )
+                        );
 
-                copyBtn.textContent = "Error al copiar";
-            }
 
-            setTimeout(() => {
-                copyBtn.textContent =
-                    "Copiar precio de venta";
-            }, 1500);
-        });
+                        copyBtn.textContent =
+                            "Copiado ✓";
+
+
+                    } catch {
+
+                        copyBtn.textContent =
+                            "Error al copiar";
+                    }
+
+
+                    setTimeout(
+                        () => {
+
+                            copyBtn.textContent =
+                                "Copiar precio de venta";
+
+                        },
+                        1500
+                    );
+                }
+            );
+        }
+
 
         return null;
     }
 };
 
 
+/*
+ * =========================================================
+ * UTILIDAD
+ * =========================================================
+ */
+
 function escapeHtml(str) {
 
     const div =
         document.createElement("div");
 
-    div.textContent = str;
+    div.textContent =
+        String(str ?? "");
 
     return div.innerHTML;
 }

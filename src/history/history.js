@@ -1,64 +1,93 @@
 export class History {
 
     constructor({ tornAPI, storage }) {
+
         this.tornAPI = tornAPI;
         this.storage = storage;
 
         this.lastDayByItem = new Map();
+
         this.initialized = false;
     }
 
 
     /*
-     * Determina el "día" de Torn a partir del
-     * timestamp del servidor (sección 6), no del
-     * reloj local.
+     * =========================================================
+     * DÍA DE TORN
+     * =========================================================
+     *
+     * Utilizamos el timestamp del servidor de Torn.
+     *
+     * Esto evita depender del reloj local del usuario.
      */
+
     async getTornDay() {
 
         const response =
             await this.tornAPI.getTimestamp();
 
         const timestamp =
-            response?.timestamp ??
-            Math.floor(Date.now() / 1000);
+            Number(response?.timestamp);
 
-        return Math.floor(timestamp / 86400);
+        const validTimestamp =
+            Number.isFinite(timestamp)
+                ? timestamp
+                : Math.floor(Date.now() / 1000);
+
+        return Math.floor(
+            validTimestamp / 86400
+        );
     }
 
 
     /*
-     * Reconstruye lastDayByItem a partir del
-     * último snapshot persistido de cada item,
-     * para no duplicar el snapshot del día
-     * actual si el userscript se recarga.
+     * =========================================================
+     * INIT
+     * =========================================================
+     *
+     * Reconstruye el último día registrado para cada artículo.
+     *
+     * No dependemos de getAllAudits(), porque un artículo puede
+     * conservar historial aunque su auditoría actual no exista.
      */
+
     async init() {
 
-        const audits =
-            await this.storage.getAllAudits();
+        const history =
+            await this.storage.getAllHistory();
 
-        for (const itemId in audits) {
+        this.lastDayByItem.clear();
 
-            const history =
-                await this.storage.getHistory(
-                    Number(itemId)
-                );
+        for (const [itemId, snapshots] of Object.entries(history)) {
+
+            if (
+                !Array.isArray(snapshots) ||
+                snapshots.length === 0
+            ) {
+                continue;
+            }
 
             const last =
-                history[history.length - 1];
+                snapshots[snapshots.length - 1];
 
-            if (last) {
-
-                const day = Math.floor(
-                    last.timestamp / 86400000
-                );
-
-                this.lastDayByItem.set(
-                    Number(itemId),
-                    day
-                );
+            if (
+                !last ||
+                !Number.isFinite(
+                    Number(last.timestamp)
+                )
+            ) {
+                continue;
             }
+
+            const day =
+                Math.floor(
+                    Number(last.timestamp) / 86400000
+                );
+
+            this.lastDayByItem.set(
+                Number(itemId),
+                day
+            );
         }
 
         this.initialized = true;
@@ -66,147 +95,359 @@ export class History {
 
 
     /*
-     * Registra un snapshot diario para el item,
-     * solo si todavía no existe uno para el
-     * día actual de Torn (sección 24).
+     * =========================================================
+     * RECORD SNAPSHOT
+     * =========================================================
      *
-     * Devuelve el audit si se guardó un snapshot
-     * nuevo, o null si el día ya tenía uno.
+     * Guarda como máximo un snapshot por artículo y por día.
      */
+
     async recordSnapshot(audit) {
+
+        if (
+            !audit ||
+            !Number.isFinite(
+                Number(audit.itemId)
+            )
+        ) {
+            return null;
+        }
+
+        /*
+         * Si History todavía no fue inicializado,
+         * inicializamos antes de registrar.
+         */
+
+        if (!this.initialized) {
+            await this.init();
+        }
+
+        const itemId =
+            Number(audit.itemId);
 
         const tornDay =
             await this.getTornDay();
 
         const lastDay =
-            this.lastDayByItem.get(audit.itemId);
+            this.lastDayByItem.get(itemId);
+
+        /*
+         * Ya existe un snapshot correspondiente
+         * al día actual.
+         */
 
         if (lastDay === tornDay) {
             return null;
         }
 
-        await this.storage.saveHistory(audit);
+        /*
+         * Nos aseguramos de que el timestamp exista.
+         */
+
+        const snapshot = {
+            ...audit,
+
+            timestamp:
+                Number.isFinite(
+                    Number(audit.timestamp)
+                )
+                    ? Number(audit.timestamp)
+                    : Date.now()
+        };
+
+        await this.storage.saveHistory(
+            snapshot
+        );
 
         this.lastDayByItem.set(
-            audit.itemId,
+            itemId,
             tornDay
         );
 
-        return audit;
+        return snapshot;
     }
 
 
     /*
-     * Serie temporal cruda para graficar
-     * (sección 25, "Gráfico").
+     * =========================================================
+     * SERIES
+     * =========================================================
+     *
+     * Devuelve solamente los valores necesarios para
+     * representar la evolución histórica.
      */
+
     async getSeries(itemId) {
 
         const history =
-            await this.storage.getHistory(itemId);
+            await this.storage.getHistory(
+                Number(itemId)
+            );
 
-        return history.map(snapshot => ({
-            timestamp: snapshot.timestamp,
-            realMarketValue: snapshot.realMarketValue,
-            correctBuyPrice: snapshot.correctBuyPrice
-        }));
+        return history
+            .filter(
+                snapshot =>
+                    snapshot &&
+                    Number.isFinite(
+                        Number(snapshot.timestamp)
+                    )
+            )
+            .map(snapshot => ({
+
+                timestamp:
+                    Number(snapshot.timestamp),
+
+                realMarketValue:
+                    Number(snapshot.realMarketValue),
+
+                correctBuyPrice:
+                    Number(snapshot.correctBuyPrice)
+
+            }));
     }
 
 
     /*
-     * Resumen agregado en las cuatro ventanas
-     * de la sección 25: ayer / 7d / 30d / 6m.
+     * =========================================================
+     * SUMMARY
+     * =========================================================
+     *
+     * Ventanas:
+     *
+     * - ayer
+     * - últimos 7 días
+     * - últimos 30 días
+     * - últimos 6 meses
      */
+
     async getSummary(itemId) {
 
         const history =
-            await this.storage.getHistory(itemId);
+            await this.storage.getHistory(
+                Number(itemId)
+            );
 
-        const now = Date.now();
-        const day = 24 * 60 * 60 * 1000;
+        const now =
+            Date.now();
+
+        const day =
+            24 * 60 * 60 * 1000;
+
 
         const buckets = {
+
             yesterday: [],
+
             last7d: [],
+
             last30d: [],
+
             last6m: []
+
         };
+
 
         for (const snapshot of history) {
 
-            const age = now - snapshot.timestamp;
-
-            if (age <= day) {
-                buckets.yesterday.push(snapshot);
+            if (
+                !snapshot ||
+                !Number.isFinite(
+                    Number(snapshot.timestamp)
+                )
+            ) {
+                continue;
             }
 
-            if (age <= 7 * day) {
-                buckets.last7d.push(snapshot);
+            const timestamp =
+                Number(snapshot.timestamp);
+
+            const age =
+                now - timestamp;
+
+
+            /*
+             * Ayer:
+             *
+             * mayor a 24 horas
+             * y menor o igual a 48 horas.
+             *
+             * Los registros de hoy ya NO entran aquí.
+             */
+
+            if (
+                age > day &&
+                age <= 2 * day
+            ) {
+
+                buckets.yesterday.push(
+                    snapshot
+                );
             }
 
-            if (age <= 30 * day) {
-                buckets.last30d.push(snapshot);
+
+            /*
+             * Últimos 7 días.
+             */
+
+            if (
+                age >= 0 &&
+                age <= 7 * day
+            ) {
+
+                buckets.last7d.push(
+                    snapshot
+                );
             }
 
-            if (age <= 180 * day) {
-                buckets.last6m.push(snapshot);
+
+            /*
+             * Últimos 30 días.
+             */
+
+            if (
+                age >= 0 &&
+                age <= 30 * day
+            ) {
+
+                buckets.last30d.push(
+                    snapshot
+                );
+            }
+
+
+            /*
+             * Últimos 6 meses.
+             */
+
+            if (
+                age >= 0 &&
+                age <= 180 * day
+            ) {
+
+                buckets.last6m.push(
+                    snapshot
+                );
             }
         }
 
-        return {
-            yesterday: this.aggregate(buckets.yesterday),
-            last7d: this.aggregate(buckets.last7d),
-            last30d: this.aggregate(buckets.last30d),
-            last6m: this.aggregate(buckets.last6m)
-        };
-    }
-
-
-    aggregate(snapshots) {
-
-        if (snapshots.length === 0) {
-            return null;
-        }
-
-        const count = snapshots.length;
-
-        const sum = (key) =>
-            snapshots.reduce(
-                (total, s) => total + (s[key] ?? 0),
-                0
-            );
-
-        const latest =
-            snapshots[snapshots.length - 1];
 
         return {
-            avgRealMarketValue:
-                sum("realMarketValue") / count,
 
-            avgCorrectBuyPrice:
-                sum("correctBuyPrice") / count,
+            yesterday:
+                this.aggregate(
+                    buckets.yesterday
+                ),
 
-            avgLearnedRatio:
-                sum("learnedRatio") / count,
+            last7d:
+                this.aggregate(
+                    buckets.last7d
+                ),
 
-            latestW3bBuyPrice:
-                latest.w3bBuyPrice,
+            last30d:
+                this.aggregate(
+                    buckets.last30d
+                ),
 
-            latestConfidence:
-                latest.confidence,
-
-            latestStatus:
-                latest.status,
-
-            samples: count
+            last6m:
+                this.aggregate(
+                    buckets.last6m
+                )
         };
     }
 
 
     /*
-     * Sección 26: últimos 10 artículos con
-     * historial modificado más recientemente.
+     * =========================================================
+     * AGGREGATE
+     * =========================================================
      */
+
+    aggregate(snapshots) {
+
+        if (
+            !Array.isArray(snapshots) ||
+            snapshots.length === 0
+        ) {
+            return null;
+        }
+
+
+        const count =
+            snapshots.length;
+
+
+        const sum =
+            (key) =>
+                snapshots.reduce(
+                    (total, snapshot) => {
+
+                        const value =
+                            Number(
+                                snapshot?.[key]
+                            );
+
+                        return total +
+                            (
+                                Number.isFinite(value)
+                                    ? value
+                                    : 0
+                            );
+                    },
+                    0
+                );
+
+
+        const latest =
+            snapshots
+                .filter(
+                    snapshot =>
+                        Number.isFinite(
+                            Number(snapshot?.timestamp)
+                        )
+                )
+                .sort(
+                    (a, b) =>
+                        Number(a.timestamp) -
+                        Number(b.timestamp)
+                )
+                .at(-1);
+
+
+        return {
+
+            avgRealMarketValue:
+                sum("realMarketValue") /
+                count,
+
+            avgCorrectBuyPrice:
+                sum("correctBuyPrice") /
+                count,
+
+            avgLearnedRatio:
+                sum("learnedRatio") /
+                count,
+
+            latestW3bBuyPrice:
+                latest?.w3bBuyPrice ?? null,
+
+            latestConfidence:
+                latest?.confidence ?? null,
+
+            latestStatus:
+                latest?.status ?? null,
+
+            samples:
+                count
+        };
+    }
+
+
+    /*
+     * =========================================================
+     * ARTÍCULOS ACTUALIZADOS RECIENTEMENTE
+     * =========================================================
+     */
+
     async getRecentlyUpdated(limit = 10) {
 
         return this.storage.getRecentlyUpdatedItems(
