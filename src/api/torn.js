@@ -243,27 +243,34 @@ export class TornAPI {
 
                     onload: (response) => {
 
-                        let data =
-                            null;
+    console.log("[TornAPI] Status:", response.status);
+    console.log("[TornAPI] Headers:", response.responseHeaders);
+    console.log("[TornAPI] Body:", response.responseText);
 
+    let data = null;
 
-                        try {
+    try {
 
-                            data =
-                                JSON.parse(
-                                    response.responseText
-                                );
+        data = JSON.parse(response.responseText);
 
-                        } catch {
+    } catch (error) {
 
-                            reject(
-                                new Error(
-                                    "Respuesta inválida de Torn API"
-                                )
-                            );
+        console.error(
+            "[TornAPI] JSON parse error:",
+            error
+        );
 
-                            return;
-                        }
+        reject(
+            new Error(
+                `Respuesta inválida de Torn API | HTTP ${response.status} | ` +
+                `Body: ${response.responseText?.slice(0, 200)}`
+            )
+        );
+
+        return;
+    }
+
+    // ... resto igual
 
 
                         /* -----------------------------------------
