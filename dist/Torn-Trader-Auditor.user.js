@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn Trader Auditor
 // @namespace    ShinNamo
-// @version      1.1.0
+// @version      1.1.1
 // @description  Auditor y analizador de precios para Torn
 // @author       ShinNamo
 // @match        https://www.torn.com/*
@@ -78,11 +78,15 @@
 					url,
 					timeout: 3e4,
 					onload: (response) => {
+						console.log("[TornAPI] Status:", response.status);
+						console.log("[TornAPI] Headers:", response.responseHeaders);
+						console.log("[TornAPI] Body:", response.responseText);
 						let data = null;
 						try {
 							data = JSON.parse(response.responseText);
-						} catch {
-							reject(/* @__PURE__ */ new Error("Respuesta inválida de Torn API"));
+						} catch (error) {
+							console.error("[TornAPI] JSON parse error:", error);
+							reject(/* @__PURE__ */ new Error(`Respuesta inválida de Torn API | HTTP ${response.status} | Body: ${response.responseText?.slice(0, 200)}`));
 							return;
 						}
 						if (data?.error?.error === "Too many requests") {
@@ -4565,3 +4569,4 @@
 	}
 	//#endregion
 })();
+
