@@ -1,645 +1,620 @@
+/*
+ * =============================================================
+ * AUDITVIEW.JS
+ * =============================================================
+ *
+ * Auditor — lista principal de alertas.
+ *
+ * ┌──────────────────────────────┐
+ * │ 🔎 Buscar artículo...        │
+ * │ 🔴 Reproductor de CD   ›     │
+ * │ 🔴 Xanax                 ›    │
+ * │ 🟡 Bottle of Beer       ›    │
+ * └──────────────────────────────┘
+ *
+ * Regla del mock:
+ *
+ *   - Sin búsqueda   → solo aparecen 🔴 y 🟡 (nunca 🟢).
+ *   - Con búsqueda   → aparece cualquier artículo que coincida,
+ *                       sin importar su color.
+ *
+ * IMPORTANTE — origen de los datos:
+ *
+ *   La lista principal NUNCA dispara auditorías nuevas: lee
+ *   exclusivamente lo que el ciclo pasivo de Scheduler ya
+ *   calculó (storage.getAllAudits()). Auditar bajo demanda
+ *   aquí saturaría la cola y el rate limit de la Torn API.
+ *
+ *   La búsqueda manual SÍ es una acción explícita del usuario:
+ *   al TOCAR un resultado (no al escribir) se llama a
+ *   scheduler.getOrAudit(item), que reutiliza caché vigente o
+ *   dispara una auditoría prioritaria si hace falta.
+ * =============================================================
+ */
 
 import {
-    formatMoney,
-    formatPercent,
-    statusBadgeClass
+    el,
+    createScreen,
+    createContent,
+    createHeader,
+    createEmptyState,
+    statusEmoji
 } from "./styles.js";
 
-export const auditView = {
+import {
+    createSearchBar
+} from "./search.js";
 
-    async render(
-        container,
-        ctx,
-        navigate,
-        params = {}
-    ) {
 
-        if (params.itemId) {
+/* =============================================================
+ * RENDER
+ * =============================================================
+ *
+ * @param {Object} deps
+ * @param {Object} deps.pricelist   - instancia de Pricelist
+ * @param {Object} deps.storage     - instancia de Storage
+ * @param {Object} deps.scheduler   - instancia de Scheduler
+ * @param {Function} deps.onNavigate
+ * @param {Function} deps.onBack
+ *
+ * @returns {{ node: HTMLElement, destroy: Function }}
+ */
 
-            return this.renderDetail(
-                container,
-                ctx,
-                navigate,
-                params.itemId
+export async function renderAuditView({
+    pricelist,
+    storage,
+    scheduler,
+    onNavigate,
+    onBack
+}) {
+
+    let searchBarRef =
+        null;
+
+    let destroyed =
+        false;
+
+
+    const header =
+        createHeader({
+
+            title:
+                "Auditor",
+
+            onBack
+        });
+
+
+    const resultsContainer =
+        el("div", {
+
+            style: {
+                display: "flex",
+                flexDirection: "column"
+            }
+        });
+
+
+    /* =====================================================
+     * NAVEGAR A UN PRODUCTO
+     * =====================================================
+     *
+     * Fila propia (no reutiliza createListItem) porque
+     * necesitamos poder reemplazar su contenido por
+     * "Auditando..." mientras se resuelve.
+     */
+
+    function createProductRow({
+        item,
+        prefix
+    }) {
+
+        const nameNode =
+            el("div", {
+
+                className:
+                    "tw3b-list-item-name",
+
+                text:
+                    item.name
+            });
+
+        const chevron =
+            el("span", {
+
+                className:
+                    "tw3b-list-item-chevron",
+
+                text:
+                    "›"
+            });
+
+        const row =
+            el("div", {
+
+                className:
+                    "tw3b-list-item",
+
+                attrs: {
+                    role: "button"
+                },
+
+                on: {
+
+                    click: async () => {
+
+                        if (
+                            row.dataset.loading ===
+                            "true"
+                        ) {
+
+                            return;
+                        }
+
+                        row.dataset.loading =
+                            "true";
+
+                        nameNode.textContent =
+                            "Auditando...";
+
+                        chevron.style.visibility =
+                            "hidden";
+
+                        try {
+
+                            const audit =
+                                await scheduler.getOrAudit(
+                                    item
+                                );
+
+
+                            if (destroyed) {
+                                return;
+                            }
+
+                            if (!audit) {
+
+                                throw new Error(
+                                    "Artículo descartado o sin datos."
+                                );
+                            }
+
+
+                            onNavigate(
+                                "auditProduct",
+                                { item, audit }
+                            );
+
+                        } catch (error) {
+
+                            console.error(
+                                "[AuditView] Error auditando artículo:",
+                                error
+                            );
+
+                            if (destroyed) {
+                                return;
+                            }
+
+                            nameNode.textContent =
+                                item.name;
+
+                            chevron.style.visibility =
+                                "visible";
+
+                            row.dataset.loading =
+                                "false";
+
+                            showTransientError(
+                                error?.message ||
+                                "No se pudo auditar el artículo."
+                            );
+                        }
+                    }
+                }
+
+            }, [
+
+                el("span", {
+                    text: prefix
+                }),
+
+                nameNode,
+
+                chevron
+            ]);
+
+        return row;
+    }
+
+
+    /* =====================================================
+     * ERROR TRANSITORIO
+     * =====================================================
+     */
+
+    const errorBanner =
+        el("div", {
+
+            style: {
+                fontSize: "12px",
+                color: "#e64953",
+                textAlign: "center",
+                padding: "6px 0",
+                display: "none"
+            }
+        });
+
+
+    let errorTimeoutHandle =
+        null;
+
+    function showTransientError(message) {
+
+        errorBanner.textContent =
+            message;
+
+        errorBanner.style.display =
+            "block";
+
+        if (errorTimeoutHandle) {
+
+            clearTimeout(
+                errorTimeoutHandle
             );
         }
 
-        return this.renderList(
-            container,
-            ctx,
-            navigate
-        );
-    },
+        errorTimeoutHandle =
+            setTimeout(
+                () => {
+
+                    if (!destroyed) {
+
+                        errorBanner.style.display =
+                            "none";
+                    }
+                },
+                3000
+            );
+    }
 
 
-    /*
-     * =========================================================
-     * LISTA DE AUDITORÍAS
-     * =========================================================
-     *
-     * Por defecto solo se muestran RED y YELLOW.
-     *
-     * Los GREEN permanecen disponibles mediante
-     * el buscador manual.
-     */
+    /* =====================================================
+     * LISTA PRINCIPAL (SOLO CACHÉ, 🔴 y 🟡)
+     * ===================================================== */
 
-    async renderList(
-        container,
-        ctx,
-        navigate
-    ) {
-
-        container.innerHTML = `
-            <input
-                type="text"
-                class="tw3b-search"
-                id="tw3b-audit-filter"
-                placeholder="🔎 Buscar artículo..."
-                autocomplete="off"
-            >
-
-            <div id="tw3b-audit-list">
-
-                <div class="tw3b-skeleton"></div>
-                <div class="tw3b-skeleton"></div>
-
-            </div>
-        `;
+    const STATUS_PRIORITY = {
+        RED: 0,
+        YELLOW: 1
+    };
 
 
-        let audits;
+    async function loadAlertEntries() {
+
+        const items =
+            await pricelist.getAll();
+
+        const audits =
+            await storage.getAllAudits();
+
+
+        const entries =
+            [];
+
+
+        for (const item of items) {
+
+            const audit =
+                audits[item.itemId];
+
+            if (!audit) {
+                continue;
+            }
+
+            if (
+                audit.status !== "RED" &&
+                audit.status !== "YELLOW"
+            ) {
+                continue;
+            }
+
+            entries.push({
+                item,
+                audit
+            });
+        }
+
+
+        entries.sort((a, b) => {
+
+            const priorityA =
+                STATUS_PRIORITY[a.audit.status] ??
+                99;
+
+            const priorityB =
+                STATUS_PRIORITY[b.audit.status] ??
+                99;
+
+            if (priorityA !== priorityB) {
+
+                return priorityA - priorityB;
+            }
+
+            const diffA =
+                Math.abs(
+                    Number(a.audit.differencePercent) || 0
+                );
+
+            const diffB =
+                Math.abs(
+                    Number(b.audit.differencePercent) || 0
+                );
+
+            return diffB - diffA;
+        });
+
+
+        return entries;
+    }
+
+
+    async function renderAlertList() {
+
+        resultsContainer.innerHTML =
+            "";
+
+        let entries =
+            [];
 
         try {
 
-            audits =
-                await ctx.storage.getAllAudits();
+            entries =
+                await loadAlertEntries();
 
         } catch (error) {
 
             console.error(
-                "[TornW3B] Error cargando auditorías:",
+                "[AuditView] Error cargando alertas:",
                 error
             );
 
-            container.querySelector(
-                "#tw3b-audit-list"
-            ).innerHTML = `
-                <div class="tw3b-error">
-                    No se pudieron cargar las auditorías.
-                </div>
-            `;
+            resultsContainer.appendChild(
 
-            return null;
+                createEmptyState(
+                    "Ocurrió un error al cargar las alertas."
+                )
+            );
+
+            return;
+        }
+
+        if (destroyed) {
+            return;
+        }
+
+        if (entries.length === 0) {
+
+            resultsContainer.appendChild(
+
+                createEmptyState(
+                    "No hay alertas pendientes. Todos los " +
+                    "artículos auditados están dentro del margen."
+                )
+            );
+
+            return;
+        }
+
+        for (const entry of entries) {
+
+            resultsContainer.appendChild(
+
+                createProductRow({
+
+                    item:
+                        entry.item,
+
+                    prefix:
+                        statusEmoji(
+                            entry.audit.status
+                        )
+                })
+            );
+        }
+    }
+
+
+    /* =====================================================
+     * BÚSQUEDA (CUALQUIER COLOR)
+     * ===================================================== */
+
+    async function renderSearchList(query) {
+
+        resultsContainer.innerHTML =
+            "";
+
+        let matches =
+            [];
+
+        try {
+
+            matches =
+                await pricelist.search(
+                    query
+                );
+
+        } catch (error) {
+
+            console.error(
+                "[AuditView] Error buscando artículos:",
+                error
+            );
+
+            resultsContainer.appendChild(
+
+                createEmptyState(
+                    "Ocurrió un error al buscar."
+                )
+            );
+
+            return;
+        }
+
+        if (destroyed) {
+            return;
+        }
+
+        if (
+            !Array.isArray(matches) ||
+            matches.length === 0
+        ) {
+
+            resultsContainer.appendChild(
+
+                createEmptyState(
+                    "Sin resultados."
+                )
+            );
+
+            return;
         }
 
 
         /*
-         * Convertimos el objeto de auditorías
-         * en una lista limpia.
+         * Lectura de estado cacheado (local, sin red)
+         * para pintar el prefijo de color de cada
+         * resultado de búsqueda.
          */
-        const list =
-            Object.values(
-                audits || {}
-            )
-            .filter(Boolean);
 
+        for (const item of matches) {
 
-        /*
-         * Orden de prioridad.
-         */
-        const order = {
-            RED: 0,
-            YELLOW: 1,
-            GREEN: 2
-        };
+            let cachedAudit =
+                null;
 
+            try {
 
-        /*
-         * Ordenamos una sola vez.
-         */
-        list.sort(
-            (a, b) =>
-                (order[a.status] ?? 3) -
-                (order[b.status] ?? 3)
-        );
+                cachedAudit =
+                    await storage.getAudit(
+                        item.itemId
+                    );
 
+            } catch {
 
-        const listEl =
-            container.querySelector(
-                "#tw3b-audit-list"
+                cachedAudit =
+                    null;
+            }
+
+            if (destroyed) {
+                return;
+            }
+
+            resultsContainer.appendChild(
+
+                createProductRow({
+
+                    item,
+
+                    prefix:
+                        cachedAudit
+                            ? statusEmoji(cachedAudit.status)
+                            : "⚪"
+                })
             );
+        }
+    }
 
 
-        /*
-         * =====================================================
-         * RENDER
-         * =====================================================
-         *
-         * Sin búsqueda:
-         *   RED + YELLOW
-         *
-         * Con búsqueda:
-         *   RED + YELLOW + GREEN
-         *
-         * Esto permite consultar manualmente
-         * artículos verdes sin llenar la lista.
-         */
+    /* =====================================================
+     * BARRA DE BÚSQUEDA
+     * ===================================================== */
 
-        const renderItems =
-            (filterText = "") => {
+    searchBarRef =
+        createSearchBar({
 
-                const normalizedFilter =
-                    String(
-                        filterText
-                    )
-                    .trim()
-                    .toLowerCase();
+            placeholder:
+                "Buscar artículo...",
 
+            onSearch: (query) => {
 
-                let filtered;
+                if (!query) {
 
-
-                if (normalizedFilter) {
-
-                    /*
-                     * Búsqueda manual:
-                     * permitimos TODOS los estados.
-                     */
-                    filtered =
-                        list.filter(
-                            audit =>
-                                String(
-                                    audit?.itemName || ""
-                                )
-                                .toLowerCase()
-                                .includes(
-                                    normalizedFilter
-                                )
-                        );
+                    renderAlertList();
 
                 } else {
 
-                    /*
-                     * Vista inicial:
-                     * únicamente alertas.
-                     */
-                    filtered =
-                        list.filter(
-                            audit =>
-                                audit?.status === "RED" ||
-                                audit?.status === "YELLOW"
-                        );
-                }
-
-
-                if (
-                    filtered.length === 0
-                ) {
-
-                    listEl.innerHTML = `
-
-                        <div class="tw3b-card-sub">
-
-                            ${
-                                normalizedFilter
-                                    ? "No se encontró ningún artículo auditado."
-                                    : "No hay artículos en rojo o amarillo."
-                            }
-
-                        </div>
-                    `;
-
-                    return;
-                }
-
-
-                listEl.innerHTML =
-                    "";
-
-
-                for (
-                    const audit
-                    of filtered
-                ) {
-
-                    const card =
-                        document.createElement(
-                            "div"
-                        );
-
-
-                    card.className =
-                        "tw3b-card";
-
-
-                    const confidence =
-                        Number(
-                            audit.confidence
-                        );
-
-
-                    const confidenceText =
-                        Number.isFinite(
-                            confidence
-                        )
-                            ? `${confidence}%`
-                            : "-";
-
-
-                    card.innerHTML = `
-
-                        <div class="tw3b-card-title">
-
-                            ${escapeHtml(
-                                audit.itemName
-                            )}
-
-                            <span class="${statusBadgeClass(
-                                audit.status
-                            )}">
-                                ${escapeHtml(
-                                    audit.status
-                                )}
-                            </span>
-
-                        </div>
-
-
-                        <div class="tw3b-card-sub">
-
-                            ${formatMoney(
-                                Number(
-                                    audit.w3bBuyPrice
-                                )
-                            )}
-
-                            →
-
-                            ${formatMoney(
-                                Number(
-                                    audit.correctBuyPrice
-                                )
-                            )}
-
-                            · confianza
-                            ${confidenceText}
-
-                        </div>
-                    `;
-
-
-                    card.addEventListener(
-                        "click",
-                        () => {
-
-                            navigate(
-                                "audit",
-                                {
-                                    itemId:
-                                        audit.itemId
-                                }
-                            );
-                        }
-                    );
-
-
-                    listEl.appendChild(
-                        card
+                    renderSearchList(
+                        query
                     );
                 }
-            };
+            }
+        });
 
 
-        /*
-         * Render inicial.
-         *
-         * Aquí NO aparecerán los GREEN.
-         */
-        renderItems();
+    const searchWrap =
+        el("div", {
+
+            style: {
+                padding:
+                    "12px 16px",
+                background:
+                    "#1c1f27",
+                borderBottom:
+                    "1px solid #2e323d"
+            }
+
+        }, [
+            searchBarRef.node
+        ]);
 
 
-        const filter =
-            container.querySelector(
-                "#tw3b-audit-filter"
-            );
+    /* =====================================================
+     * CARGA INICIAL
+     * ===================================================== */
+
+    await renderAlertList();
 
 
-        filter.addEventListener(
-            "input",
-            event => {
+    /* =====================================================
+     * ESTRUCTURA FINAL
+     * ===================================================== */
 
-                renderItems(
-                    event.target.value
+    const screen =
+        createScreen([
+
+            header,
+
+            searchWrap,
+
+            errorBanner,
+
+            createContent([
+                resultsContainer
+            ])
+        ]);
+
+
+    return {
+
+        node:
+            screen,
+
+
+        destroy() {
+
+            destroyed =
+                true;
+
+            if (errorTimeoutHandle) {
+
+                clearTimeout(
+                    errorTimeoutHandle
                 );
             }
-        );
 
+            if (searchBarRef) {
 
-        return null;
-    },
-
-
-    /*
-     * =========================================================
-     * DETALLE
-     * =========================================================
-     */
-
-    async renderDetail(
-        container,
-        ctx,
-        navigate,
-        itemId
-    ) {
-
-        container.innerHTML = `
-            <div class="tw3b-skeleton"></div>
-            <div class="tw3b-skeleton"></div>
-        `;
-
-
-        let audit;
-
-        try {
-
-            audit =
-                await ctx.storage.getAudit(
-                    itemId
-                );
-
-        } catch (error) {
-
-            console.error(
-                "[TornW3B] Error obteniendo auditoría:",
-                error
-            );
-
-            container.innerHTML = `
-                <div class="tw3b-error">
-                    No se pudo cargar la auditoría.
-                </div>
-            `;
-
-            return null;
-        }
-
-
-        if (!audit) {
-
-            container.innerHTML = `
-                <div class="tw3b-error">
-                    No hay datos de auditoría
-                    para este artículo.
-                </div>
-            `;
-
-            return null;
-        }
-
-
-        const confidence =
-            Number(
-                audit.confidence
-            );
-
-
-        const confidenceText =
-            Number.isFinite(
-                confidence
-            )
-                ? `${confidence}%`
-                : "-";
-
-
-        container.innerHTML = `
-
-            <div class="tw3b-card-title">
-                ${escapeHtml(
-                    audit.itemName
-                )}
-            </div>
-
-
-            ${row(
-                "Item Value",
-                formatMoney(
-                    Number(
-                        audit.itemValue
-                    )
-                )
-            )}
-
-
-            ${row(
-                "W3B Buy",
-                formatMoney(
-                    Number(
-                        audit.w3bBuyPrice
-                    )
-                )
-            )}
-
-
-            ${row(
-                "Observed W3B",
-                formatPercent(
-                    Number(
-                        audit.observedRatio
-                    )
-                )
-            )}
-
-
-            ${row(
-                "Learned W3B",
-                formatPercent(
-                    Number(
-                        audit.learnedRatio
-                    )
-                )
-            )}
-
-
-            ${row(
-                "Market Units",
-                formatNumber(
-                    audit.totalMarketQuantity
-                )
-            )}
-
-
-            ${row(
-                "Sample",
-                formatNumber(
-                    audit.sampleQuantity
-                )
-            )}
-
-
-            ${row(
-                "Weighted Mean",
-                formatMoney(
-                    Number(
-                        audit.weightedMean
-                    )
-                )
-            )}
-
-
-            ${row(
-                "Weighted Median",
-                formatMoney(
-                    Number(
-                        audit.weightedMedian
-                    )
-                )
-            )}
-
-
-            ${row(
-                "Real Market Value",
-                formatMoney(
-                    Number(
-                        audit.realMarketValue
-                    )
-                )
-            )}
-
-
-            ${row(
-                "Correct Buy",
-                formatMoney(
-                    Number(
-                        audit.correctBuyPrice
-                    )
-                )
-            )}
-
-
-            ${row(
-                "Difference",
-                formatPercent(
-                    Number(
-                        audit.differencePercent
-                    )
-                )
-            )}
-
-
-            ${row(
-                "Confidence",
-                confidenceText
-            )}
-
-
-            ${row(
-                "Status",
-                `
-                    <span class="${statusBadgeClass(
-                        audit.status
-                    )}">
-                        ${escapeHtml(
-                            audit.status
-                        )}
-                    </span>
-                `
-            )}
-
-
-            <button
-                class="tw3b-button"
-                id="tw3b-view-history"
-                style="margin-top: 10px;"
-            >
-                Ver historial
-            </button>
-        `;
-
-
-        const historyButton =
-            container.querySelector(
-                "#tw3b-view-history"
-            );
-
-
-        historyButton.addEventListener(
-            "click",
-            () => {
-
-                navigate(
-                    "history",
-                    {
-                        itemId:
-                            audit.itemId
-                    }
-                );
+                searchBarRef.destroy();
             }
-        );
-
-
-        return null;
-    }
-};
-
-
-/*
- * =========================================================
- * UTILIDADES
- * =========================================================
- */
-
-function row(
-    label,
-    value
-) {
-
-    return `
-        <div class="tw3b-row">
-
-            <span class="tw3b-row-label">
-                ${escapeHtml(label)}
-            </span>
-
-            <span>
-                ${value}
-            </span>
-
-        </div>
-    `;
-}
-
-
-function formatNumber(value) {
-
-    const number =
-        Number(value);
-
-
-    if (
-        !Number.isFinite(number)
-    ) {
-
-        return "-";
-    }
-
-
-    return number.toLocaleString(
-        "en-US"
-    );
-}
-
-
-function escapeHtml(str) {
-
-    const div =
-        document.createElement(
-            "div"
-        );
-
-
-    div.textContent =
-        String(str ?? "");
-
-
-    return div.innerHTML;
+        }
+    };
 }

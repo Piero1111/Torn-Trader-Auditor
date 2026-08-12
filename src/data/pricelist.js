@@ -189,4 +189,153 @@ export class Pricelist {
                 .includes(normalizedQuery)
         );
     }
+
+    
+    /*
+    * =========================================================
+    * ACTUALIZAR PRECIO DE UN ARTÍCULO
+    * =========================================================
+    *
+    * Actualiza el precio fijo de un artículo en W3B.
+    *
+    * El precio recibido representa el precio de compra
+    * recomendado por nuestro sistema.
+    */
+
+    async updatePrice(
+        userId,
+        itemId,
+        buyPrice
+    ) {
+
+        const id =
+            Number(itemId);
+
+
+        /*
+        * =====================================================
+        * VALIDAR ITEM ID
+        * =====================================================
+        */
+
+        if (
+            !Number.isInteger(id) ||
+            id <= 0
+        ) {
+
+            throw new Error(
+                "ID de artículo inválido."
+            );
+        }
+
+
+        /*
+        * =====================================================
+        * VALIDAR PRECIO
+        * =====================================================
+        */
+
+        const price =
+            Number(buyPrice);
+
+
+        if (
+            !Number.isFinite(price) ||
+            price <= 0
+        ) {
+
+            throw new Error(
+                `Precio inválido para el artículo ${id}.`
+            );
+        }
+
+
+        /*
+        * =====================================================
+        * PRECIO TORN
+        * =====================================================
+        *
+        * Torn no utiliza decimales.
+        */
+
+        const fixedPrice =
+            Math.round(price);
+
+
+        /*
+        * =====================================================
+        * ACTUALIZAR W3B
+        * =====================================================
+        */
+
+        const response =
+            await this.w3bAPI.updatePricelist(
+
+                userId,
+
+                [
+                    {
+                        itemID:
+                            id,
+
+                        pricingValue:
+                            fixedPrice
+                    }
+                ]
+            );
+
+
+        /*
+        * =====================================================
+        * ACTUALIZAR CACHE LOCAL
+        * =====================================================
+        *
+        * Solamente actualizamos la cache si W3B confirmó
+        * correctamente la operación.
+        */
+
+        const items =
+            await this.getAll();
+
+
+        const updatedItems =
+            items.map(item => {
+
+                if (
+                    item.itemId !== id
+                ) {
+
+                    return item;
+                }
+
+
+                return {
+
+                    ...item,
+
+                    buyPrice:
+                        fixedPrice
+                };
+            });
+
+
+        await this.storage.savePricelist(
+            updatedItems
+        );
+
+
+        return {
+
+            itemId:
+                id,
+
+            buyPrice:
+                fixedPrice,
+
+            w3b:
+                response
+        };
+    }
+
+
 }

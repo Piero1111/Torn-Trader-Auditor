@@ -1,19 +1,55 @@
-
 export class Auditor {
 
     constructor({
         tornAPI,
+        w3bAPI,
         marketAnalyzer,
+        bazaarAnalyzer,
+        marketValueAnalyzer,
         ratioLearner,
-        storage
+        storage,
+        priceProposal,
+        internalPriceList,
+        w3bUserId
     }) {
 
-        this.tornAPI = tornAPI;
-        this.marketAnalyzer = marketAnalyzer;
-        this.ratioLearner = ratioLearner;
-        this.storage = storage;
+        this.tornAPI =
+            tornAPI;
+
+        this.w3bAPI =
+            w3bAPI;
+
+        this.marketAnalyzer =
+            marketAnalyzer;
+
+        this.bazaarAnalyzer =
+            bazaarAnalyzer;
+
+        this.marketValueAnalyzer =
+            marketValueAnalyzer;
+
+        this.ratioLearner =
+            ratioLearner;
+
+        this.storage =
+            storage;
+
+        this.priceProposal =
+            priceProposal;
+
+        this.internalPriceList =
+            internalPriceList;
+
+        this.w3bUserId =
+            w3bUserId;
     }
 
+
+    /*
+     * =========================================================
+     * AUDIT
+     * =========================================================
+     */
 
     async audit(item) {
 
@@ -24,6 +60,7 @@ export class Auditor {
          */
 
         if (!item) {
+
             throw new Error(
                 "No se recibió un artículo para auditar."
             );
@@ -32,7 +69,6 @@ export class Auditor {
 
         const itemId =
             Number(item.itemId);
-
 
         const buyPrice =
             Number(item.buyPrice);
@@ -86,22 +122,6 @@ export class Auditor {
          * =====================================================
          * OBSERVED RATIO
          * =====================================================
-         *
-         * Porcentaje efectivo de compra de W3B:
-         *
-         *      W3B Buy Price
-         * ----------------------
-         *       Torn Item Value
-         *
-         * Ejemplo:
-         *
-         * Buy Price  = 25,554
-         * Item Value = 26,075
-         *
-         * Ratio ≈ 0.9800
-         *
-         * Es decir, W3B está comprando aproximadamente
-         * al 98% del Item Value.
          */
 
         const observedRatio =
@@ -111,7 +131,9 @@ export class Auditor {
             );
 
 
-        if (!Number.isFinite(observedRatio)) {
+        if (
+            !Number.isFinite(observedRatio)
+        ) {
 
             throw new Error(
                 `No se pudo calcular el porcentaje W3B para ${item.name}.`
@@ -123,20 +145,6 @@ export class Auditor {
          * =====================================================
          * HISTORIAL ANTERIOR
          * =====================================================
-         *
-         * La auditoría anterior contiene el porcentaje
-         * aprendido previamente para este artículo.
-         *
-         * Si nunca fue auditado:
-         *
-         *     learnedRatio = observedRatio
-         *
-         * Si ya fue auditado:
-         *
-         *     learnedRatio = EWMA(
-         *         anterior,
-         *         observación actual
-         *     )
          */
 
         const previousAudit =
@@ -152,7 +160,9 @@ export class Auditor {
             );
 
 
-        if (!Number.isFinite(learnedRatio)) {
+        if (
+            !Number.isFinite(learnedRatio)
+        ) {
 
             throw new Error(
                 `No se pudo determinar el porcentaje aprendido para ${item.name}.`
@@ -162,12 +172,21 @@ export class Auditor {
 
         /*
          * =====================================================
-         * MARKET
+         * TORN ITEM MARKET
          * =====================================================
-         *
-         * Solo consultamos el mercado después de comprobar
-         * que Item Value y el porcentaje W3B son válidos.
          */
+
+        if (
+            !this.tornAPI ||
+            typeof this.tornAPI.getItemMarket !==
+            "function"
+        ) {
+
+            throw new Error(
+                "Torn Item Market API no está disponible."
+            );
+        }
+
 
         const marketResponse =
             await this.tornAPI.getItemMarket(
@@ -175,15 +194,52 @@ export class Auditor {
             );
 
 
-        const listings =
+        const marketListings =
             marketResponse?.itemmarket?.listings ||
             [];
 
 
-        const marketAnalysis =
-            this.marketAnalyzer.analyze(
-                listings
+        if (
+            !Array.isArray(marketListings) ||
+            marketListings.length === 0
+        ) {
+
+            throw new Error(
+                `No hay vendedores disponibles en el Item Market de Torn para ${item.name}.`
             );
+        }
+
+
+        /*
+         * =====================================================
+         * ANALIZAR ITEM MARKET
+         * =====================================================
+         */
+
+        const normalizedMarketListings =
+            marketListings.map(
+                listing => ({
+
+                    ...listing,
+
+                    quantity:
+                        Number(
+                            listing?.quantity ??
+                            listing?.amount
+                        ),
+
+                    price:
+                        Number(
+                            listing?.price
+                        )
+                })
+            );
+
+
+        const marketAnalysis =
+            this.marketAnalyzer?.analyze(
+                normalizedMarketListings
+            ) ?? null;
 
 
         if (!marketAnalysis) {
@@ -196,32 +252,332 @@ export class Auditor {
 
         /*
          * =====================================================
-         * PRECIO CORRECTO DE COMPRA
+         * W3B MARKETPLACE
+         * =====================================================
+         */
+
+        if (
+            !this.w3bAPI ||
+            typeof this.w3bAPI.getMarketplace !==
+            "function"
+        ) {
+
+            throw new Error(
+                "W3B Marketplace API no está disponible."
+            );
+        }
+
+
+        const marketplace =
+            await this.w3bAPI.getMarketplace(
+                itemId
+            );
+
+
+        /*
+         * =====================================================
+         * LISTINGS DE BAZARES
+         * =====================================================
+         */
+
+        const bazaarListings =
+            marketplace?.listings ||
+            [];
+
+
+        let bazaarAnalysis =
+            null;
+
+
+        let marketValueAnalysis =
+            null;
+
+
+        if (
+            Array.isArray(bazaarListings) &&
+            bazaarListings.length > 0 &&
+            this.bazaarAnalyzer &&
+            typeof this.bazaarAnalyzer.analyze ===
+            "function"
+        ) {
+
+            try {
+
+                bazaarAnalysis =
+                    this.bazaarAnalyzer.analyze(
+                        bazaarListings
+                    );
+
+            } catch (error) {
+
+                console.warn(
+                    `[Auditor] Error analizando bazares para ${item.name}:`,
+                    error
+                );
+            }
+        }
+
+
+        /*
+         * =====================================================
+         * MARKET VALUE ANALYZER
+         * =====================================================
+         */
+
+        if (
+            this.marketValueAnalyzer &&
+            typeof this.marketValueAnalyzer.analyze ===
+            "function"
+        ) {
+
+            try {
+
+                marketValueAnalysis =
+                    this.marketValueAnalyzer.analyze({
+
+                        market:
+                            marketAnalysis,
+
+                        bazaars:
+                            bazaarAnalysis
+                    });
+
+            } catch (error) {
+
+                console.warn(
+                    `[Auditor] Error combinando señales de mercado para ${item.name}:`,
+                    error
+                );
+            }
+        }
+
+
+        /*
+         * =====================================================
+         * VALIDAR MARKET VALUE REAL
+         * =====================================================
+         */
+
+        if (
+            !marketValueAnalysis ||
+            !Number.isFinite(
+                Number(
+                    marketValueAnalysis.realMarketValue
+                )
+            ) ||
+            Number(
+                marketValueAnalysis.realMarketValue
+            ) <= 0
+        ) {
+
+            throw new Error(
+                `No se pudo determinar el Market Value real para ${item.name}.`
+            );
+        }
+
+
+        /*
+ * =====================================================
+ * PRECIO INTERNO DE REFERENCIA
+ * =====================================================
+ *
+ * Es el valor contra el que comparamos el Market Value
+ * recién calculado. Si el artículo nunca tuvo un
+ * registro interno, se crea aquí (primera observación).
+ *
+ * IMPORTANTE: audit() NUNCA llama a
+ * internalPriceList.update() — eso es responsabilidad
+ * exclusiva de PriceUpdateService.accept(), disparado
+ * manualmente desde auditProductView.js.
+ */
+
+let internalPrice =
+    null;
+
+if (this.internalPriceList) {
+
+    internalPrice =
+        await this.internalPriceList.get(
+            itemId
+        );
+
+    if (!internalPrice) {
+
+        internalPrice =
+            await this.internalPriceList.initialize({
+
+                itemId,
+
+                itemName:
+                    item.name,
+
+                realMarketValue:
+                    marketValueAnalysis.realMarketValue,
+
+                learnedRatio,
+
+                confidence:
+                    marketValueAnalysis.confidence,
+
+                w3bBuyPrice:
+                    buyPrice
+            });
+    }
+}
+
+
+        /*
+         * =====================================================
+         * PRICE PROPOSAL
          * =====================================================
          *
-         * El precio recomendado NO utiliza directamente
-         * el porcentaje observado actual.
+         * BUGFIX: se pasa `currentBuyPrice` (el precio que HOY
+         * está publicado en W3B) para que PriceProposal decida
+         * si hace falta actualizar comparando lo publicado
+         * contra lo recomendado — y no contra el valor interno
+         * recién inicializado (que en la primera auditoría de
+         * un artículo siempre coincide con realMarketValue,
+         * dando 0% de diferencia aunque el precio esté muy
+         * desviado). Ver priceProposal.js para el detalle.
+         */
+
+        let priceProposalResult =
+            null;
+
+
+        if (
+            this.priceProposal &&
+            typeof this.priceProposal.generate ===
+            "function" &&
+            internalPrice
+        ) {
+
+            priceProposalResult =
+                this.priceProposal.generate({
+
+                    itemId,
+
+                    itemName:
+                        item.name,
+
+                    internalMarketValue:
+                        internalPrice.internalMarketValue,
+
+                    realMarketValue:
+                        marketValueAnalysis.realMarketValue,
+
+                    learnedRatio,
+
+                    confidence:
+                        marketValueAnalysis.confidence,
+
+                    currentBuyPrice:
+                        buyPrice
+                });
+        }
+
+
+        /*
+         * =====================================================
+         * PRECIO RECOMENDADO (SOLO INFORMATIVO)
+         * =====================================================
          *
-         * Utiliza el porcentaje aprendido:
+         * auditor.js YA NO aplica cambios automáticamente.
          *
-         * Real Market Value × Learned Ratio
+         * La propuesta (priceProposalResult) queda calculada y
+         * disponible en el resultado para que la interfaz decida.
          *
-         * Esto permite que TornW3B construya progresivamente
-         * su propia referencia para cada artículo.
+         * Aplicar realmente el cambio (InternalPriceList + W3B)
+         * es responsabilidad de:
+         *
+         *     PriceUpdateService.accept(priceProposal)
+         *     Pricelist.updatePrice(userId, itemId, recommendedBuyPrice)
+         *
+         * disparadas manualmente desde auditProductView.js
+         * mediante el botón "APLICAR CAMBIO".
+         */
+
+        const priceUpdate =
+            null;
+
+
+        /*
+         * =====================================================
+         * PRECIO CORRECTO DE COMPRA
+         * =====================================================
          */
 
         const correctBuyPrice =
-            marketAnalysis.realMarketValue *
-            learnedRatio;
+            Math.round(
+                Number(
+                    marketValueAnalysis.realMarketValue
+                ) *
+                learnedRatio
+            );
+
+
+        if (
+            !Number.isFinite(correctBuyPrice) ||
+            correctBuyPrice <= 0
+        ) {
+
+            throw new Error(
+                `No se pudo calcular el precio correcto de compra para ${item.name}.`
+            );
+        }
+        /*
+         * =====================================================
+         * PRECIO DE VENTA RECOMENDADO
+         * =====================================================
+         *
+         * El margen de venta es la mitad del margen de compra
+         * (learnedRatio), aplicado sobre el Item Value de Torn.
+         */
+
+        const sellRatio =
+            this.ratioLearner.calculateSellRatio(
+                learnedRatio
+            );
+
+
+        const recommendedSellPrice =
+            this.ratioLearner.calculateRecommendedSellPrice(
+                itemValue,
+                learnedRatio
+            );
+        /*
+         * =====================================================
+         * PRECIO DE VENTA — REFERENCIAL DEL AUDITOR
+         * =====================================================
+         *
+         * IMPORTANTE: este valor es DISTINTO a recommendedSellPrice
+         * de arriba, y cada uno alimenta una pantalla distinta:
+         *
+         *   - recommendedSellPrice (arriba): sobre el Item Value
+         *     de Torn. Lo usa la funcionalidad VENTA (saleView.js)
+         *     para una venta rápida de referencia.
+         *
+         *   - auditRecommendedSellPrice (aquí): sobre el MISMO
+         *     realMarketValue que generó `correctBuyPrice`. Lo
+         *     debe mostrar el AUDITOR (auditProductView.js) junto
+         *     a "Compra recomendada", para que ambos números sean
+         *     coherentes entre sí (comprar y vender anclados al
+         *     mismo valor de mercado del día). Usar itemValue ahí
+         *     producía recomendaciones absurdas cuando itemValue
+         *     y realMarketValue están muy alejados entre sí.
+         */
+
+        const auditRecommendedSellPrice =
+            this.ratioLearner.calculateRecommendedSellPrice(
+                marketValueAnalysis.realMarketValue,
+                learnedRatio
+            );
 
 
         /*
          * =====================================================
          * DIFERENCIA
          * =====================================================
-         *
-         * Mide qué tan alejado está el precio actual de W3B
-         * respecto al precio que TornW3B considera correcto.
          */
 
         const differencePercent =
@@ -229,9 +585,16 @@ export class Auditor {
                 ? Math.abs(
                     buyPrice -
                     correctBuyPrice
-                ) / correctBuyPrice
+                ) /
+                correctBuyPrice
                 : null;
 
+
+        /*
+         * =====================================================
+         * STATUS
+         * =====================================================
+         */
 
         const status =
             this.calculateStatus(
@@ -243,7 +606,7 @@ export class Auditor {
          * =====================================================
          * RESULTADO
          * =====================================================
-         */
+ */
 
         const result = {
 
@@ -254,34 +617,187 @@ export class Auditor {
 
             itemValue,
 
-            /*
-             * Precio actual que ofrece W3B.
-             */
-
             w3bBuyPrice:
                 buyPrice,
 
-            /*
-             * Observación actual.
-             */
-
             observedRatio,
-
-            /*
-             * Referencia aprendida por TornW3B.
-             */
 
             learnedRatio,
 
+
             /*
-             * Datos del mercado.
+             * =================================================
+             * MARKET
+             * =================================================
+             */
+
+            market: {
+
+                totalQuantity:
+                    marketAnalysis.totalQuantity,
+
+                listingsCount:
+                    marketAnalysis.listingsCount,
+
+                targetQuantity:
+                    marketAnalysis.targetQuantity,
+
+                requiredListings:
+                    marketAnalysis.requiredListings,
+
+                sampleSize:
+                    marketAnalysis.sampleSize,
+
+                sampleQuantity:
+                    marketAnalysis.sampleQuantity,
+
+                weightedMean:
+                    marketAnalysis.weightedMean,
+
+                weightedMedian:
+                    marketAnalysis.weightedMedian,
+
+                dispersion:
+                    marketAnalysis.dispersion,
+
+                realMarketValue:
+                    marketAnalysis.realMarketValue,
+
+                confidence:
+                    marketAnalysis.confidence,
+                     /*
+                 * =============================================
+                 * VENDEDORES DE LA MUESTRA
+                 * =============================================
+                 *
+                 * Necesario para distributionView.js: permite
+                 * mostrar qué vendedores concretos formaron
+                 * parte del cálculo estadístico (incluidos)
+                 * frente al resto del mercado (excluidos).
+                 */
+
+                sampleListings:
+                    marketAnalysis.sampleListings
+            
+            },
+           
+
+            /*
+             * =================================================
+             * BAZAARS
+             * =================================================
+             */
+
+            bazaars:
+                bazaarAnalysis
+                    ? {
+
+                        totalQuantity:
+                            bazaarAnalysis.totalQuantity,
+
+                        listingsCount:
+                            bazaarAnalysis.listingsCount,
+
+                        traderCount:
+                            bazaarAnalysis.traderCount,
+
+                        minPrice:
+                            bazaarAnalysis.minPrice,
+
+                        maxPrice:
+                            bazaarAnalysis.maxPrice,
+
+                        weightedMean:
+                            bazaarAnalysis.weightedMean,
+
+                        weightedMedian:
+                            bazaarAnalysis.weightedMedian,
+
+                        dispersion:
+                            bazaarAnalysis.dispersion,
+
+                        priceDistribution:
+                            bazaarAnalysis.priceDistribution,
+
+                        largestTraderQuantity:
+                            bazaarAnalysis.largestTraderQuantity,
+
+                        largestTraderShare:
+                            bazaarAnalysis.largestTraderShare,
+                            /*
+                         * Ranking completo, usado por
+                         * competitionView.js.
+                         */
+                        topTraders: bazaarAnalysis.topTraders,
+
+                        confidence:
+                            bazaarAnalysis.confidence
+                    }
+
+                    : null,
+
+
+            /*
+             * =================================================
+             * MARKET VALUE
+             * =================================================
+             */
+
+            marketValueAnalysis,
+
+
+            /*
+             * =================================================
+             * PRICE PROPOSAL
+             * =================================================
+             */
+
+            priceProposal:
+                priceProposalResult,
+
+
+            /*
+             * =================================================
+             * PRICE UPDATE
+             * =================================================
+             */
+
+            priceUpdate,
+
+
+            /*
+             * =================================================
+             * MARKETPLACE
+             * =================================================
              */
 
             totalMarketQuantity:
                 marketAnalysis.totalQuantity,
 
+            listingsCount:
+                marketAnalysis.listingsCount,
+
+            targetQuantity:
+                marketAnalysis.targetQuantity,
+
+            accumulatedQuantity:
+                marketAnalysis.accumulatedQuantity,
+
+            sampleListingsCount:
+                marketAnalysis.sampleListingsCount,
+
+            sellerSampleSize:
+                marketAnalysis.sellerSampleSize,
+
             sampleQuantity:
                 marketAnalysis.sampleQuantity,
+
+
+            /*
+             * =================================================
+             * ESTADÍSTICAS
+             * =================================================
+             */
 
             weightedMean:
                 marketAnalysis.weightedMean,
@@ -292,44 +808,127 @@ export class Auditor {
             dispersion:
                 marketAnalysis.dispersion,
 
+            /*
+             * BUGFIX (Bug #2):
+             *
+             * Antes: marketAnalysis.realMarketValue (solo Item
+             * Market de Torn, SIN bazares).
+             *
+             * correctBuyPrice / recommendedSellPrice / la
+             * propuesta de precio SIEMPRE usaron
+             * marketValueAnalysis.realMarketValue (combinado
+             * Item Market + Bazaars). Mostrar aquí el valor
+             * "solo mercado" hacía que "Mercado real" en
+             * auditProductView.js NO coincidiera con el valor
+             * que realmente generó "Compra recomendada",
+             * produciendo cifras que parecían absurdas
+             * (ej: Mercado real $103 pero Compra recomendada
+             * $384, calculada en realidad sobre ~$591).
+             *
+             * Ahora usamos la MISMA fuente que el resto del
+             * sistema: el valor combinado y ponderado por
+             * confianza de MarketValueAnalyzer.
+             */
             realMarketValue:
-                marketAnalysis.realMarketValue,
+                marketValueAnalysis.realMarketValue,
+
 
             /*
-             * Precio que TornW3B recomienda pagar.
+             * =================================================
+             * PRECIO CORRECTO
+             * =================================================
              */
 
             correctBuyPrice,
+               /*
+             * =================================================
+             * PRECIO DE VENTA
+             * =================================================
+             */
+
+            sellRatio,
+
+            recommendedSellPrice,
+            auditRecommendedSellPrice,
+
 
             /*
-             * Diferencia entre W3B y nuestra referencia.
+             * =================================================
+             * DIFERENCIA
+             * =================================================
              */
 
             differencePercent,
 
+
+            /*
+             * =================================================
+             * CONFIANZA
+             * =================================================
+             *
+             * BUGFIX (Bug #2): igual que con realMarketValue,
+             * se usaba marketAnalysis.confidence (solo Item
+             * Market). Ahora se usa marketValueAnalysis.confidence,
+             * que es la confianza REAL que determina si
+             * priceProposal habilita el botón "Aplicar cambio".
+             * Mostrar la confianza "equivocada" ocultaba por
+             * qué el botón no aparecía.
+             */
+
             confidence:
-                marketAnalysis.confidence,
+                marketValueAnalysis.confidence,
+
+
+            /*
+             * =================================================
+             * STATUS
+             * =================================================
+             */
 
             status,
 
+
             /*
-             * Información de cache de Torn.
+             * =================================================
+             * INFORMACIÓN MARKETPLACE
+             * =================================================
              */
 
-            marketCacheTimestamp:
-                marketResponse
-                    ?.itemmarket
-                    ?.cache_timestamp
-                    ?? null,
+            marketplaceItemName:
+                marketplace?.item_name ??
+                null,
 
-            marketCacheDelay:
-                marketResponse
-                    ?.itemmarket
-                    ?.cache_delay
-                    ?? null,
+            marketplacePrice:
+                Number.isFinite(
+                    Number(
+                        marketplace?.market_price
+                    )
+                )
+                    ? Number(
+                        marketplace.market_price
+                    )
+                    : null,
+
+            bazaarAverage:
+                Number.isFinite(
+                    Number(
+                        marketplace?.bazaar_average
+                    )
+                )
+                    ? Number(
+                        marketplace.bazaar_average
+                    )
+                    : null,
+
+            marketplaceGeneratedAt:
+                marketplace?.generated_at ??
+                null,
+
 
             /*
-             * Momento de esta auditoría.
+             * =================================================
+             * TIMESTAMP
+             * =================================================
              */
 
             timestamp:
@@ -341,13 +940,6 @@ export class Auditor {
          * =====================================================
          * GUARDAR AUDITORÍA
          * =====================================================
-         *
-         * Importante:
-         *
-         * Aquí queda persistido learnedRatio.
-         *
-         * La próxima auditoría podrá utilizarlo como
-         * previousAudit.learnedRatio.
          */
 
         await this.storage.saveAudit(
@@ -367,17 +959,13 @@ export class Auditor {
 
     calculateStatus(difference) {
 
-        if (!Number.isFinite(difference)) {
+        if (
+            !Number.isFinite(difference)
+        ) {
+
             return "RED";
         }
 
-
-        /*
-         * Diferencia <= 3%
-         *
-         * El precio de W3B está muy cerca
-         * del precio recomendado.
-         */
 
         if (
             difference <= 0.03
@@ -387,10 +975,6 @@ export class Auditor {
         }
 
 
-        /*
-         * Diferencia entre 3% y 10%.
-         */
-
         if (
             difference <= 0.10
         ) {
@@ -398,10 +982,6 @@ export class Auditor {
             return "YELLOW";
         }
 
-
-        /*
-         * Diferencia superior al 10%.
-         */
 
         return "RED";
     }

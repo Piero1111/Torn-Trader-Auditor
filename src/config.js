@@ -35,6 +35,16 @@ export const CONFIG = {
 
     HISTORY_DAYS:
         180,
+        /*
+     * Historial CRUDO por auditoría individual (no agregado
+     * por día). Usado únicamente para graficar la variación
+     * intradía en el Historial ("Último día").
+     *
+     * Se mantiene una ventana corta porque cada auditoría
+     * (hasta 1/hora por artículo) se guarda sin deduplicar.
+     */
+    AUDIT_HISTORY_HOURS:
+        48,
 
 
     SEARCH_MIN_LENGTH:

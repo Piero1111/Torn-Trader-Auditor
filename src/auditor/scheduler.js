@@ -11,6 +11,7 @@ export class Scheduler {
         pricelist,
         storage,
         history,
+        auditHistory,
         concurrency = 1
     }) {
 
@@ -18,6 +19,7 @@ export class Scheduler {
         this.pricelist = pricelist;
         this.storage = storage;
         this.history = history;
+        this.auditHistory = auditHistory;
 
         this.concurrency =
             Math.max(
@@ -1165,6 +1167,45 @@ export class Scheduler {
                 await this.history.recordSnapshot(
                     result
                 );
+            }
+            /*
+             * Historial (agregado diario).
+             */
+
+            if (
+                result &&
+                this.history
+            ) {
+
+                await this.history.recordSnapshot(result);
+            }
+
+
+            /*
+             * Historial crudo por auditoría (intradía).
+             *
+             * No debe interrumpir la auditoría si falla:
+             * es un dato secundario para graficar.
+             */
+
+            if (
+                result &&
+                this.auditHistory
+            ) {
+
+                try {
+
+                    await this.auditHistory.record(
+                        result
+                    );
+
+                } catch (error) {
+
+                    console.warn(
+                        `[Scheduler] Error guardando historial de auditoría para ${item.name}:`,
+                        error
+                    );
+                }
             }
 
 

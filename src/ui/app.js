@@ -1,2288 +1,1560 @@
+/*
+ * =============================================================
+ * APP.JS
+ * =============================================================
+ *
+ * Router / orquestador de toda la interfaz TornW3B.
+ *
+ * Responsabilidades:
+ *
+ *   1. Montar el FAB arrastrable (posición persistida).
+ *   2. Abrir/cerrar el panel principal al tocar el FAB.
+ *   3. Mantener la pila de navegación entre pantallas.
+ *   4. Resolver, para cada pantalla, las dependencias y datos
+ *      adicionales que necesita (audit, internalPrice, config)
+ *      ANTES de montarla.
+ *   5. Destruir correctamente la vista anterior (listeners,
+ *      timeouts) antes de montar la siguiente.
+ *
+ * Contrato de navegación usado por TODAS las vistas:
+ *
+ *     onNavigate(screen: string, params？: Object, options？: { replace: boolean })
+ *
+ * Mapa de pantallas (screen → view):
+ *
+ *     main            → mainView
+ *     sale            → saleView
+ *     audit           → auditView            (lista de alertas)
+ *     auditProduct    → auditProductView
+ *     market          → marketView
+ *     distribution    → distributionView
+ *     competition     → competitionView
+ *     learning        → learningView
+ *     history         → historyView (general)
+ *     historyProduct  → historyView (producto)
+ *     historyPeriod   → historyView (período)
+ *     settings        → settingsView
+ * =============================================================
+ */
 
 import {
-    injectStyles
+    injectStyles,
+    el
 } from "./styles.js";
 
+import { renderMainView } from "./mainView.js";
+import { renderSaleView } from "./saleView.js";
+import { renderAuditView } from "./auditView.js";
+import { renderAuditProductView } from "./auditProductView.js";
+import { renderMarketView } from "./marketView.js";
+import { renderDistributionView } from "./distributionView.js";
+import { renderCompetitionView } from "./competitionView.js";
+import { renderLearningView } from "./learningView.js";
+import {
+    renderHistoryGeneralView,
+    renderHistoryProductView,
+    renderHistoryPeriodView
+} from "./historyView.js";
+import { renderSettingsView } from "./settingsView.js";
 
-const VIEWS = {
 
-    MENU: "menu",
-    SALE: "sale",
-    AUDIT: "audit",
-    HISTORY: "history",
-    SETTINGS: "settings"
+const FAB_POSITION_KEY =
+    "tw3b_fab_position";
+
+
+/* =============================================================
+ * TABLA DE RUTAS
+ * =============================================================
+ *
+ * Cada entrada recibe (params, ctx) y devuelve una Promise que
+ * resuelve a { node, destroy }. ctx expone todas las
+ * dependencias de negocio + helpers de navegación.
+ * ============================================================= */
+
+const routes = {
+
+    /* =====================================================
+     * MAIN
+     * ===================================================== */
+
+
+
+    /* =====================================================
+     * SALE
+     * ===================================================== */
+
+    async sale(params, ctx) {
+
+        const item =
+            params.item;
+
+        let audit =
+            params.audit ||
+            null;
+
+        if (
+            !audit &&
+            item &&
+            ctx.scheduler
+        ) {
+
+            try {
+
+                audit =
+                    await ctx.scheduler.getOrAudit(
+                        item
+                    );
+
+            } catch (error) {
+
+                console.error(
+                    "[App] Error obteniendo auditoría para Venta:",
+                    error
+                );
+            }
+        }
+
+        return renderSaleView({
+
+            item,
+
+            audit,
+
+            onNavigate:
+                ctx.navigate
+        });
+    },
+
+
+    /* =====================================================
+     * AUDIT (lista de alertas)
+     * ===================================================== */
+
+    async audit(params, ctx) {
+
+        return renderAuditView({
+
+            pricelist:
+                ctx.pricelist,
+
+            storage:
+                ctx.storage,
+
+            scheduler:
+                ctx.scheduler,
+
+            onNavigate:
+                ctx.navigate,
+
+            onBack:
+                ctx.back
+        });
+    },
+
+
+    /* =====================================================
+     * AUDIT PRODUCT
+     * ===================================================== */
+
+    async auditProduct(params, ctx) {
+
+        let w3bUserId =
+            null;
+
+        try {
+
+            const config =
+                await ctx.storage.getConfig();
+
+            w3bUserId =
+                config?.w3bUserId ||
+                null;
+
+        } catch (error) {
+
+            console.error(
+                "[App] Error obteniendo configuración:",
+                error
+            );
+        }
+
+        return renderAuditProductView({
+
+            item:
+                params.item,
+
+            audit:
+                params.audit,
+
+            w3bUserId,
+
+            priceUpdateService:
+                ctx.priceUpdateService,
+
+            pricelist:
+                ctx.pricelist,
+
+            onNavigate:
+                ctx.navigate,
+
+            onBack:
+                ctx.back,
+
+            onAuditUpdated:
+                ctx.handleAuditUpdated
+        });
+    },
+
+
+    /* =====================================================
+     * MARKET
+     * ===================================================== */
+
+    async market(params, ctx) {
+
+        return renderMarketView({
+
+            item:
+                params.item,
+
+            audit:
+                params.audit,
+
+            onNavigate:
+                ctx.navigate,
+
+            onBack:
+                ctx.back
+        });
+    },
+
+
+    /* =====================================================
+     * DISTRIBUTION
+     * ===================================================== */
+
+    async distribution(params, ctx) {
+
+        return renderDistributionView({
+
+            audit:
+                params.audit,
+
+            onBack:
+                ctx.back
+        });
+    },
+
+
+    /* =====================================================
+     * COMPETITION
+     * ===================================================== */
+
+    async competition(params, ctx) {
+
+        return renderCompetitionView({
+
+            audit:
+                params.audit,
+
+            onBack:
+                ctx.back
+        });
+    },
+
+
+    /* =====================================================
+     * LEARNING
+     * ===================================================== */
+
+    async learning(params, ctx) {
+
+        let internalPrice =
+            null;
+
+        if (
+            params.item &&
+            ctx.storage
+        ) {
+
+            try {
+
+                internalPrice =
+                    await ctx.storage.getInternalPrice(
+                        params.item.itemId
+                    );
+
+            } catch (error) {
+
+                console.error(
+                    "[App] Error obteniendo precio interno:",
+                    error
+                );
+            }
+        }
+
+        return renderLearningView({
+
+            audit:
+                params.audit,
+
+            internalPrice,
+
+            onBack:
+                ctx.back
+        });
+    },
+
+
+    /* =====================================================
+     * HISTORY (general)
+     * ===================================================== */
+
+    async history(params, ctx) {
+
+        return renderHistoryGeneralView({
+
+            history:
+                ctx.history,
+
+            pricelist:
+                ctx.pricelist,
+
+            onNavigate:
+                ctx.navigate,
+
+            onBack:
+                ctx.back
+        });
+    },
+
+
+    /* =====================================================
+     * HISTORY PRODUCT
+     * ===================================================== */
+
+    async historyProduct(params, ctx) {
+
+        return renderHistoryProductView({
+
+            item:
+                params.item,
+
+            history:
+                ctx.history,
+
+            onNavigate:
+                ctx.navigate,
+
+            onBack:
+                ctx.back
+        });
+    },
+
+
+    /* =====================================================
+     * HISTORY PERIOD
+     * ===================================================== */
+
+    async historyPeriod(params, ctx) {
+
+        return renderHistoryPeriodView({
+
+            item:
+                params.item,
+
+            period:
+                params.period,
+
+            history:
+                ctx.history,
+
+            auditHistory:
+                ctx.auditHistory,
+
+            onBack:
+                ctx.back
+        });
+    },
+
+
+    /* =====================================================
+     * SETTINGS
+     * ===================================================== */
+
+    async settings(params, ctx) {
+
+        return renderSettingsView({
+
+            storage:
+                ctx.storage,
+
+            tornAPI:
+                ctx.tornAPI,
+
+            w3bAPI:
+                ctx.w3bAPI,
+
+            pricelist:
+                ctx.pricelist,
+            scheduler:
+                ctx.scheduler,
+
+            onBack:
+                ctx.back,
+
+            onCredentialsSaved:
+                ctx.handleCredentialsSaved
+        });
+    }
 };
 
 
-/*
- * =========================================================
- * IDENTIFICADORES GLOBALES
- * =========================================================
+/* =============================================================
+ * CREAR APP
+ * =============================================================
  *
- * Estos IDs permiten garantizar que solamente exista
- * una instancia visual de TornW3B en el documento.
+ * @param {Object} deps - todas las instancias de negocio ya
+ *                        construidas por main.js:
+ *
+ *   pricelist, storage, scheduler, history, auditHistory,
+ *   tornAPI, w3bAPI, priceUpdateService
+ *
+ * @returns {{ mount: Function, destroy: Function }}
  */
 
-const FAB_ID =
-    "tornw3b-fab";
+export function createApp(deps) {
 
-const PANEL_ID =
-    "tornw3b-panel";
-
-const APP_INSTANCE_KEY =
-    "__TornW3B_App_Instance__";
+    injectStyles();
 
 
-export class App {
-
-    constructor(ctx, views = {}) {
-
-        this.ctx =
-            ctx;
-
-        this.views =
-            views;
+    /* =====================================================
+     * ESTADO DE NAVEGACIÓN
+     * ===================================================== */
+    const stack =
+        [];
 
 
-        this.currentView =
-            VIEWS.MENU;
+    let currentView =
+        null;
 
-        this.activeViewInstance =
-            null;
+    let isOpen =
+        false;
 
+    let isQuickBarOpen =
+        false;
 
-        this.fab =
-            null;
+    let quickBarView =
+        null;
 
-        this.panel =
-            null;
-
-        this.panelBody =
-            null;
-
-
-        this.searchInput =
-            null;
-
-        this.iconBar =
-            null;
+    let navigationToken =
+        0;
 
 
-        /*
-         * =====================================================
-         * ESTADO
-         * =====================================================
-         */
+    /* =====================================================
+     * CONTEXTO COMPARTIDO CON LAS VISTAS
+     * ===================================================== */
 
-        this.mounted =
+    const ctx = {
+
+        ...deps,
+
+        navigate,
+
+        back,
+
+        handleAuditUpdated,
+
+        handleCredentialsSaved
+    };
+
+
+    /* =====================================================
+     * DOM RAÍZ
+     * ===================================================== */
+
+    const fab =
+        el("div", {
+
+            className:
+                "tw3b-fab",
+
+            text:
+                "TW",
+
+            attrs: {
+                role: "button",
+                "aria-label": "Abrir TornW3B"
+            }
+        });
+
+
+    const panelContent =
+        el("div", {
+
+            style: {
+                width: "100%",
+                height: "100%",
+                overflow: "hidden",
+                display: "flex",
+                flexDirection: "column"
+            }
+        });
+
+
+    const panel =
+        el("div", {
+
+            className:
+                "tw3b-panel"
+
+        }, [
+            panelContent
+        ]);
+
+
+    const overlay =
+        el("div", {
+
+            className:
+                "tw3b-overlay",
+
+            style: {
+                display: "none"
+            },
+
+            on: {
+
+                click: (event) => {
+
+                    /*
+                     * Cerrar solo si se tocó el fondo,
+                     * no el panel en sí.
+                     */
+
+                    if (event.target === overlay) {
+
+                        closePanel();
+                    }
+                }
+            }
+
+        }, [
+            panel
+        ]);
+         const quickBarContent =
+        el("div", {
+
+            style: {
+                width: "100%"
+            }
+        });
+
+    const quickBar =
+        el("div", {
+
+            className:
+                "tw3b-quickbar",
+
+            style: {
+                display: "none"
+            }
+
+        }, [
+            quickBarContent
+        ]);
+
+
+    fab.addEventListener(
+        "click",
+        (event) => {
+
+            /*
+             * Evitar que un "click" disparado justo después
+             * de arrastrar abra/cierre el panel accidentalmente.
+             */
+
+            if (fab.dataset.dragged === "true") {
+
+                fab.dataset.dragged =
+                    "false";
+
+                return;
+            }
+
+            togglePanel();
+        }
+    );
+
+
+    setupFabDrag(
+        fab
+    );
+
+
+    document.body.appendChild(
+        fab
+    );
+
+    document.body.appendChild(
+        overlay
+    );
+
+    document.body.appendChild(
+        quickBar
+    );
+
+
+    window.addEventListener(
+        "resize",
+        () => {
+
+            if (isQuickBarOpen) {
+
+                positionQuickBar();
+            }
+
+            if (isOpen) {
+
+                positionPanel();
+            }
+        }
+    );
+
+
+    /* =====================================================
+     * ABRIR / CERRAR PANEL
+     * ===================================================== */
+
+    function openPanel() {
+
+        isOpen =
+            true;
+
+        overlay.style.display =
+            "block";
+
+        renderCurrentScreen();
+
+        positionPanel();
+    }
+
+
+    function closePanel() {
+
+        isOpen =
             false;
 
-        this.destroyed =
-            false;
-
-
-        /*
-         * =====================================================
-         * FAB
-         * =====================================================
-         */
-
-        this.fabPositionKey =
-            "tornw3b-fab-position";
-
-        this.isDraggingFab =
-            false;
-
-        this.fabDragOffsetX =
-            0;
-
-        this.fabDragOffsetY =
-            0;
-
-        this.fabWasDragged =
-            false;
-
-
-        /*
-         * =====================================================
-         * LISTENERS
-         * =====================================================
-         */
-
-        this.boundResize =
-            null;
-
-        this.boundFabPointerDown =
-            null;
-
-        this.boundFabPointerMove =
-            null;
-
-        this.boundFabPointerUp =
-            null;
-
-        this.boundFabPointerCancel =
-            null;
-
-        this.boundFabClick =
-            null;
+        overlay.style.display =
+            "none";
     }
 
 
     /*
-     * =========================================================
-     * MOUNT
-     * =========================================================
+     * =====================================================
+     * QUICKBAR (menú principal — flota junto al FAB)
+     * =====================================================
+     *
+     * Ya no es una pantalla dentro del panel: es un elemento
+     * flotante independiente que se reposiciona cada vez que
+     * el FAB se arrastra.
+     */
+    function positionPanel() {
+
+        const fabRect =
+            fab.getBoundingClientRect();
+
+        const margin =
+            12;
+
+        const panelWidth =
+            Math.min(
+                440,
+                window.innerWidth - margin * 2
+            );
+
+        panel.style.width =
+            `${panelWidth}px`;
+
+        let left =
+            fabRect.right - panelWidth;
+
+        left =
+            clamp(
+                left,
+                margin,
+                window.innerWidth - panelWidth - margin
+            );
+
+        const panelHeight =
+            panel.offsetHeight ||
+            300;
+
+        let top =
+            fabRect.top - panelHeight - 12;
+
+        if (top < margin) {
+
+            /*
+             * No hay espacio arriba del FAB: mostramos
+             * el panel debajo, igual que hace la quickbar.
+             */
+
+            top =
+                fabRect.bottom + 12;
+        }
+
+        top =
+            clamp(
+                top,
+                margin,
+                window.innerHeight - panelHeight - margin
+            );
+
+        panel.style.left =
+            `${left}px`;
+
+        panel.style.top =
+            `${top}px`;
+    }
+
+    function positionQuickBar() {
+
+        const fabRect =
+            fab.getBoundingClientRect();
+
+        const margin =
+            12;
+
+        const barWidth =
+            Math.min(
+                320,
+                window.innerWidth - margin * 2
+            );
+
+        quickBar.style.width =
+            `${barWidth}px`;
+
+        let left =
+            fabRect.right - barWidth;
+
+        left =
+            clamp(
+                left,
+                margin,
+                window.innerWidth - barWidth - margin
+            );
+
+        const barHeight =
+            quickBar.offsetHeight ||
+            52;
+
+        let top =
+            fabRect.top - barHeight - 12;
+
+        if (top < margin) {
+
+            /*
+             * No hay espacio arriba del FAB (está pegado al
+             * borde superior): mostramos la barra debajo.
+             */
+
+            top =
+                fabRect.bottom + 12;
+        }
+
+        top =
+            clamp(
+                top,
+                margin,
+                window.innerHeight - barHeight - margin
+            );
+
+        quickBar.style.left =
+            `${left}px`;
+
+        quickBar.style.top =
+            `${top}px`;
+    }
+
+
+    function handleOutsideQuickBarClick(event) {
+
+        if (
+            quickBar.contains(event.target) ||
+            fab.contains(event.target)
+        ) {
+
+            return;
+        }
+
+        closeQuickBar();
+    }
+
+
+    function openQuickBar() {
+
+        isQuickBarOpen =
+            true;
+
+        quickBarView =
+            renderMainView({
+
+                pricelist:
+                    deps.pricelist,
+
+                onNavigate:
+                    navigate
+            });
+
+        quickBarContent.innerHTML =
+            "";
+
+        quickBarContent.appendChild(
+            quickBarView.node
+        );
+
+        quickBar.style.display =
+            "flex";
+
+        positionQuickBar();
+
+        document.addEventListener(
+            "pointerdown",
+            handleOutsideQuickBarClick,
+            true
+        );
+    }
+
+
+    function closeQuickBar() {
+
+        if (!isQuickBarOpen) {
+            return;
+        }
+
+        isQuickBarOpen =
+            false;
+
+        quickBar.style.display =
+            "none";
+
+        document.removeEventListener(
+            "pointerdown",
+            handleOutsideQuickBarClick,
+            true
+        );
+
+        if (
+            quickBarView &&
+            typeof quickBarView.destroy === "function"
+        ) {
+
+            try {
+
+                quickBarView.destroy();
+
+            } catch {
+                // Ignorar.
+            }
+        }
+
+        quickBarView =
+            null;
+
+        quickBarContent.innerHTML =
+            "";
+    }
+
+
+    function togglePanel() {
+
+        if (isOpen) {
+
+            closePanel();
+
+            return;
+        }
+
+        if (isQuickBarOpen) {
+
+            closeQuickBar();
+
+        } else {
+
+            openQuickBar();
+        }
+    }
+
+
+    /* =====================================================
+     * NAVEGACIÓN
+     * =====================================================
+     *
+     * @param {string} screen
+     * @param {Object} [params]
+     * @param {Object} [options]
+     * @param {boolean} [options.replace]
      */
 
-    mount() {
+    function navigate(screen, params = {}, options = {}) {
 
         /*
-         * -----------------------------------------------------
-         * Protección contra múltiples mount() de la misma
-         * instancia.
-         * -----------------------------------------------------
+         * "main" ya no es una pantalla dentro del panel: es
+         * "volver a casa" — cerramos todo y dejamos solo el
+         * FAB. El usuario vuelve a tocarlo para abrir la
+         * quickbar de nuevo.
          */
 
-        if (this.mounted) {
+        if (screen === "main") {
 
-            console.warn(
-                "[TornW3B] App.mount() ignorado: " +
-                "la aplicación ya está montada."
+            stack.length =
+                0;
+
+            closeQuickBar();
+
+            closePanel();
+
+            return;
+        }
+
+
+        if (
+            !routes[screen]
+        ) {
+
+            console.error(
+                `[App] Pantalla desconocida: "${screen}"`
             );
 
             return;
         }
 
 
-        /*
-         * -----------------------------------------------------
-         * Protección GLOBAL.
-         *
-         * Si otra instancia de App existe, la destruimos
-         * antes de crear una nueva.
-         * -----------------------------------------------------
-         */
+        if (options.replace) {
 
-        const previousApp =
-            window[APP_INSTANCE_KEY];
+            stack.pop();
+        }
 
 
-        if (
-            previousApp &&
-            previousApp !== this &&
-            typeof previousApp.destroy === "function"
-        ) {
+        stack.push({
+            screen,
+            params
+        });
 
-            console.warn(
-                "[TornW3B] Se detectó una instancia anterior. " +
-                "Destruyéndola antes de montar la nueva."
+
+        closeQuickBar();
+
+        if (!isOpen) {
+
+            openPanel();
+
+        } else {
+
+            renderCurrentScreen();
+        }
+    }
+
+
+    /* =====================================================
+     * VOLVER
+     * ===================================================== */
+
+    function back() {
+
+        if (stack.length <= 1) {
+
+            /*
+             * Ya estamos en la raíz (Main): no hay a dónde
+             * volver dentro del panel. Cerramos el panel.
+             */
+
+            closePanel();
+
+            return;
+        }
+
+
+        stack.pop();
+
+        renderCurrentScreen();
+    }
+
+
+    /* =====================================================
+     * RENDER DE LA PANTALLA ACTUAL
+     * =====================================================
+     *
+     * `navigationToken` evita "carreras": si el usuario
+     * navega rápido varias veces mientras una vista async
+     * anterior todavía se está resolviendo, la resolución
+     * vieja se descarta al llegar tarde.
+     */
+
+    async function renderCurrentScreen() {
+
+        const token =
+            ++navigationToken;
+
+        const top =
+            stack[stack.length - 1];
+
+        const routeFn =
+            routes[top.screen];
+
+
+        showLoading();
+
+
+        let result =
+            null;
+
+        try {
+
+            result =
+                await routeFn(
+                    top.params || {},
+                    ctx
+                );
+
+        } catch (error) {
+
+            console.error(
+                `[App] Error renderizando "${top.screen}":`,
+                error
             );
 
+            if (token !== navigationToken) {
+                return;
+            }
+
+            showError(
+                error?.message ||
+                "Ocurrió un error inesperado."
+            );
+
+            return;
+        }
+
+
+        if (token !== navigationToken) {
+
+            /*
+             * Llegó tarde: otra navegación ya ocurrió
+             * mientras esto se resolvía. Destruimos el
+             * resultado obsoleto sin montarlo.
+             */
 
             try {
 
-                previousApp.destroy();
+                result?.destroy?.();
+
+            } catch {
+                // Ignorar.
+            }
+
+            return;
+        }
+
+
+        mountView(
+            result
+        );
+    }
+
+
+    /* =====================================================
+     * MONTAJE / DESMONTAJE
+     * ===================================================== */
+
+    function mountView(result) {
+
+        if (
+            currentView &&
+            typeof currentView.destroy === "function"
+        ) {
+
+            try {
+
+                currentView.destroy();
 
             } catch (error) {
 
                 console.warn(
-                    "[TornW3B] Error destruyendo instancia anterior:",
+                    "[App] Error destruyendo vista anterior:",
                     error
                 );
             }
         }
 
 
-        /*
-         * -----------------------------------------------------
-         * Limpieza defensiva del DOM.
-         *
-         * Incluso si una instancia anterior quedó incompleta,
-         * nunca permitimos múltiples FAB/panel.
-         * -----------------------------------------------------
-         */
+        currentView =
+            result;
 
-        document
-            .querySelectorAll(
-                `#${FAB_ID}`
-            )
-            .forEach(
-                element => {
+        panelContent.innerHTML =
+            "";
 
-                    element.remove();
+        if (result?.node) {
 
-                }
+            panelContent.appendChild(
+                result.node
             );
-
-
-        document
-            .querySelectorAll(
-                `#${PANEL_ID}`
-            )
-            .forEach(
-                element => {
-
-                    element.remove();
-
-                }
-            );
-
-
-        /*
-         * Registrar esta instancia como la única activa.
-         */
-
-        window[APP_INSTANCE_KEY] =
-            this;
-
-
-        this.mounted =
-            true;
-
-        this.destroyed =
-            false;
-
-
-        /*
-         * =====================================================
-         * ESTILOS
-         * =====================================================
-         */
-
-        injectStyles();
-
-
-        /*
-         * =====================================================
-         * FAB
-         * =====================================================
-         */
-
-        this.fab =
-            document.createElement(
-                "button"
-            );
-
-
-        this.fab.id =
-            FAB_ID;
-
-
-        this.fab.className =
-            "tw3b-fab";
-
-
-        this.fab.type =
-            "button";
-
-
-        this.fab.innerHTML =
-            "💰";
-
-
-        this.fab.setAttribute(
-            "aria-label",
-            "Abrir TornW3B Trader"
-        );
-
-
-        this.fab.style.touchAction =
-            "none";
-
-
-        /*
-         * Posición guardada.
-         */
-
-        this.loadFabPosition();
-
-
-        /*
-         * Arrastre.
-         */
-
-        this.enableFabDragging();
-
-
-        /*
-         * =====================================================
-         * PANEL
-         * =====================================================
-         */
-
-        this.panel =
-            document.createElement(
-                "div"
-            );
-
-
-        this.panel.id =
-            PANEL_ID;
-
-
-        this.panel.className =
-            "tw3b-panel";
-
-
-        this.panelBody =
-            document.createElement(
-                "div"
-            );
-
-
-        this.panelBody.className =
-            "tw3b-panel-body";
-
-
-        this.panel.appendChild(
-            this.panelBody
-        );
-
-
-        /*
-         * =====================================================
-         * DOM
-         * =====================================================
-         */
-
-        document.body.appendChild(
-            this.fab
-        );
-
-
-        document.body.appendChild(
-            this.panel
-        );
-
-
-        /*
-         * =====================================================
-         * RESIZE
-         * =====================================================
-         */
-
-        this.boundResize =
-            () => {
-
-                if (
-                    this.destroyed
-                ) {
-
-                    return;
-                }
-
-
-                this.keepFabInsideViewport();
-
-
-                if (
-                    this.panel &&
-                    this.panel.classList.contains(
-                        "open"
-                    )
-                ) {
-
-                    this.updatePanelPosition();
-                }
-            };
-
-
-        window.addEventListener(
-            "resize",
-            this.boundResize
-        );
-
-
-        /*
-         * =====================================================
-         * MENÚ INICIAL
-         * =====================================================
-         */
-
-        this.renderMenu();
-
-
-        this.refreshAlertBadge();
-    }
-
-
-    /*
-     * =========================================================
-     * DESTROY
-     * =========================================================
-     */
-
-    destroy() {
-
-        if (
-            this.destroyed
-        ) {
-
-            return;
         }
 
 
-        this.destroyed =
-            true;
+        if (isOpen) {
 
-        this.mounted =
-            false;
+            positionPanel();
+        }
+    }
 
 
-        /*
-         * Detener vista activa.
-         */
+    function showLoading() {
+
+        panelContent.innerHTML =
+            "";
+
+        panelContent.appendChild(
+
+            el("div", {
+
+                style: {
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    height: "100%",
+                    color: "#9aa0ac",
+                    fontSize: "13px"
+                },
+
+                text:
+                    "Cargando..."
+            })
+        );
+
+        if (isOpen) {
+
+            positionPanel();
+        }
+    }
+
+
+    function showError(message) {
+
+        panelContent.innerHTML =
+            "";
+
+        panelContent.appendChild(
+
+            el("div", {
+
+                style: {
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    height: "100%",
+                    gap: "12px",
+                    padding: "24px",
+                    textAlign: "center"
+                }
+
+            }, [
+
+                el("div", {
+
+                    style: {
+                        color: "#e64953",
+                        fontSize: "13px"
+                    },
+
+                    text:
+                        message
+                }),
+
+                el("button", {
+
+                    className:
+                        "tw3b-btn tw3b-btn-secondary",
+
+                    style: {
+                        width: "auto",
+                        padding: "8px 20px"
+                    },
+
+                    text:
+                        "Volver al inicio",
+
+                    on: {
+
+                        click: () => {
+
+                            stack.length =
+                                0;
+
+                            stack.push({
+                                screen: "main",
+                                params: {}
+                            });
+
+                            renderCurrentScreen();
+                        }
+                    }
+                })
+            ])
+        );
+        if (isOpen) {
+
+            positionPanel();
+        }
+    }
+
+
+    /* =====================================================
+     * CALLBACKS DE NEGOCIO
+     * ===================================================== */
+
+    function handleAuditUpdated(itemId) {
+
+        const numericId =
+            Number(itemId);
 
         if (
-            this.activeViewInstance &&
-            typeof this.activeViewInstance.destroy ===
+            deps.scheduler &&
+            deps.scheduler.lastAuditByItem &&
+            typeof deps.scheduler.lastAuditByItem.delete ===
             "function"
         ) {
 
-            try {
+            /*
+             * Invalida el caché de "última auditoría" para
+             * que la próxima visita a este artículo dispare
+             * una auditoría fresca contra el valor recién
+             * aprendido, en vez de reutilizar la comparación
+             * vieja.
+             */
 
-                this.activeViewInstance.destroy();
+            deps.scheduler.lastAuditByItem.delete(
+                numericId
+            );
+        }
+    }
 
-            } catch (error) {
 
-                console.warn(
-                    "[TornW3B] Error destruyendo vista:",
-                    error
+    function handleCredentialsSaved() {
+
+        /*
+         * Si el Scheduler todavía no se inició (primera
+         * configuración de credenciales), lo arrancamos
+         * ahora que ya hay algo que auditar.
+         */
+
+        if (
+            deps.scheduler &&
+            typeof deps.scheduler.start === "function" &&
+            !deps.scheduler.started
+        ) {
+
+            deps.scheduler.start();
+        }
+    }
+
+
+    /* =====================================================
+     * DRAG DEL FAB
+     * =====================================================
+     *
+     * Arrastre con Pointer Events (funciona con touch y
+     * mouse). Posición persistida en localStorage.
+     */
+
+    function setupFabDrag(node) {
+
+        restoreFabPosition(
+            node
+        );
+
+
+        let dragging =
+            false;
+
+        let startX =
+            0;
+
+        let startY =
+            0;
+
+        let originLeft =
+            0;
+
+        let originTop =
+            0;
+
+
+        node.addEventListener(
+            "pointerdown",
+            (event) => {
+
+                dragging =
+                    true;
+
+                node.dataset.dragged =
+                    "false";
+
+                startX =
+                    event.clientX;
+
+                startY =
+                    event.clientY;
+
+                const rect =
+                    node.getBoundingClientRect();
+
+                originLeft =
+                    rect.left;
+
+                originTop =
+                    rect.top;
+
+                node.setPointerCapture?.(
+                    event.pointerId
                 );
             }
-        }
+        );
 
 
-        this.activeViewInstance =
-            null;
+        node.addEventListener(
+            "pointermove",
+            (event) => {
 
-
-        /*
-         * Eliminar resize listener.
-         */
-
-        if (
-            this.boundResize
-        ) {
-
-            window.removeEventListener(
-                "resize",
-                this.boundResize
-            );
-
-            this.boundResize =
-                null;
-        }
-
-
-        /*
-         * Eliminar listeners del FAB.
-         */
-
-        this.removeFabListeners();
-
-
-        /*
-         * Eliminar FAB.
-         */
-
-        if (
-            this.fab &&
-            this.fab.parentNode
-        ) {
-
-            this.fab.parentNode.removeChild(
-                this.fab
-            );
-        }
-
-
-        /*
-         * Eliminar panel.
-         */
-
-        if (
-            this.panel &&
-            this.panel.parentNode
-        ) {
-
-            this.panel.parentNode.removeChild(
-                this.panel
-            );
-        }
-
-
-        this.fab =
-            null;
-
-        this.panel =
-            null;
-
-        this.panelBody =
-            null;
-
-        this.searchInput =
-            null;
-
-        this.iconBar =
-            null;
-
-
-        /*
-         * Limpieza defensiva.
-         */
-
-        document
-            .querySelectorAll(
-                `#${FAB_ID}`
-            )
-            .forEach(
-                element => {
-
-                    element.remove();
-
+                if (!dragging) {
+                    return;
                 }
-            );
+
+                const deltaX =
+                    event.clientX - startX;
+
+                const deltaY =
+                    event.clientY - startY;
 
 
-        document
-            .querySelectorAll(
-                `#${PANEL_ID}`
-            )
-            .forEach(
-                element => {
+                if (
+                    Math.abs(deltaX) > 4 ||
+                    Math.abs(deltaY) > 4
+                ) {
 
-                    element.remove();
-
+                    node.dataset.dragged =
+                        "true";
                 }
+
+
+                const nextLeft =
+                    clamp(
+                        originLeft + deltaX,
+                        0,
+                        window.innerWidth - node.offsetWidth
+                    );
+
+                const nextTop =
+                    clamp(
+                        originTop + deltaY,
+                        0,
+                        window.innerHeight - node.offsetHeight
+                    );
+
+
+               node.style.left =
+                    `${nextLeft}px`;
+
+                node.style.top =
+                    `${nextTop}px`;
+
+                node.style.right =
+                    "auto";
+
+                node.style.bottom =
+                    "auto";
+
+
+                if (isQuickBarOpen) {
+
+                    positionQuickBar();
+                }
+
+                if (isOpen) {
+
+                    positionPanel();
+                }
+            }
+        );
+
+        const endDrag = () => {
+
+            if (!dragging) {
+                return;
+            }
+
+            dragging =
+                false;
+
+            saveFabPosition(
+                node
             );
 
+            if (isQuickBarOpen) {
 
-        /*
-         * Solo eliminar la referencia global
-         * si esta instancia sigue siendo la activa.
-         */
+                positionQuickBar();
+            }
 
-        if (
-            window[APP_INSTANCE_KEY] ===
-            this
-        ) {
+            if (isOpen) {
 
-            window[APP_INSTANCE_KEY] =
-                null;
-        }
+                positionPanel();
+            }
+        };
+
+
+        node.addEventListener(
+            "pointerup",
+            endDrag
+        );
+
+        node.addEventListener(
+            "pointercancel",
+            endDrag
+        );
     }
 
 
-    /*
-     * =========================================================
-     * REMOVE FAB LISTENERS
-     * =========================================================
-     */
+    function restoreFabPosition(node) {
 
-    removeFabListeners() {
-
-        if (!this.fab) {
-            return;
-        }
-
-
-        if (
-            this.boundFabPointerDown
-        ) {
-
-            this.fab.removeEventListener(
-                "pointerdown",
-                this.boundFabPointerDown
-            );
-
-            this.boundFabPointerDown =
-                null;
-        }
-
-
-        if (
-            this.boundFabPointerMove
-        ) {
-
-            this.fab.removeEventListener(
-                "pointermove",
-                this.boundFabPointerMove
-            );
-
-            this.boundFabPointerMove =
-                null;
-        }
-
-
-        if (
-            this.boundFabPointerUp
-        ) {
-
-            this.fab.removeEventListener(
-                "pointerup",
-                this.boundFabPointerUp
-            );
-
-            this.boundFabPointerUp =
-                null;
-        }
-
-
-        if (
-            this.boundFabPointerCancel
-        ) {
-
-            this.fab.removeEventListener(
-                "pointercancel",
-                this.boundFabPointerCancel
-            );
-
-            this.boundFabPointerCancel =
-                null;
-        }
-
-
-        if (
-            this.boundFabClick
-        ) {
-
-            this.fab.removeEventListener(
-                "click",
-                this.boundFabClick
-            );
-
-            this.boundFabClick =
-                null;
-        }
-    }
-
-
-    /*
-     * =========================================================
-     * FAB POSITION
-     * =========================================================
-     */
-
-    loadFabPosition() {
-
-        if (!this.fab) {
-            return;
-        }
-
+        let saved =
+            null;
 
         try {
 
             const raw =
                 localStorage.getItem(
-                    this.fabPositionKey
+                    FAB_POSITION_KEY
                 );
 
+            saved =
+                raw
+                    ? JSON.parse(raw)
+                    : null;
 
-            if (!raw) {
-                return;
-            }
+        } catch {
 
-
-            const position =
-                JSON.parse(raw);
-
-
-            if (
-                !position ||
-                !Number.isFinite(
-                    Number(position.left)
-                ) ||
-                !Number.isFinite(
-                    Number(position.top)
-                )
-            ) {
-
-                return;
-            }
+            saved =
+                null;
+        }
 
 
-            this.fab.style.left =
-                `${Number(position.left)}px`;
+        if (
+            saved &&
+            Number.isFinite(saved.left) &&
+            Number.isFinite(saved.top)
+        ) {
 
+            node.style.left =
+                `${saved.left}px`;
 
-            this.fab.style.top =
-                `${Number(position.top)}px`;
+            node.style.top =
+                `${saved.top}px`;
 
-
-            this.fab.style.right =
+            node.style.right =
                 "auto";
 
-
-            this.fab.style.bottom =
+            node.style.bottom =
                 "auto";
 
+        } else {
 
-        } catch (error) {
+            /*
+             * Posición inicial por defecto: esquina
+             * inferior derecha, sobre la UI de TornPDA.
+             */
 
-            console.warn(
-                "[TornW3B] No se pudo recuperar la posición del botón:",
-                error
-            );
+            node.style.right =
+                "16px";
+
+            node.style.bottom =
+                "80px";
         }
     }
 
 
-    saveFabPosition() {
-
-        if (!this.fab) {
-            return;
-        }
-
-
-        const rect =
-            this.fab.getBoundingClientRect();
-
+    function saveFabPosition(node) {
 
         try {
 
+            const rect =
+                node.getBoundingClientRect();
+
             localStorage.setItem(
-                this.fabPositionKey,
+
+                FAB_POSITION_KEY,
+
                 JSON.stringify({
-
-                    left:
-                        Math.round(
-                            rect.left
-                        ),
-
-                    top:
-                        Math.round(
-                            rect.top
-                        )
+                    left: rect.left,
+                    top: rect.top
                 })
             );
 
-
         } catch (error) {
 
             console.warn(
-                "[TornW3B] No se pudo guardar la posición del botón:",
+                "[App] No se pudo guardar la posición del FAB:",
                 error
             );
         }
     }
 
 
-    keepFabInsideViewport() {
-
-        if (!this.fab) {
-            return;
-        }
-
-
-        const rect =
-            this.fab.getBoundingClientRect();
-
-
-        const hasExplicitPosition =
-            this.fab.style.left ||
-            this.fab.style.top;
-
-
-        if (!hasExplicitPosition) {
-            return;
-        }
-
-
-        const width =
-            this.fab.offsetWidth;
-
-
-        const height =
-            this.fab.offsetHeight;
-
-
-        let left =
-            rect.left;
-
-
-        let top =
-            rect.top;
-
-
-        left =
-            Math.max(
-                0,
-                Math.min(
-                    left,
-                    window.innerWidth -
-                    width
-                )
-            );
-
-
-        top =
-            Math.max(
-                0,
-                Math.min(
-                    top,
-                    window.innerHeight -
-                    height
-                )
-            );
-
-
-        this.fab.style.left =
-            `${left}px`;
-
-
-        this.fab.style.top =
-            `${top}px`;
-
-
-        this.fab.style.right =
-            "auto";
-
-
-        this.fab.style.bottom =
-            "auto";
-
-
-        this.saveFabPosition();
-    }
-
-
-    /*
-     * =========================================================
-     * FAB DRAGGING
-     * =========================================================
-     */
-
-    enableFabDragging() {
-
-        if (!this.fab) {
-            return;
-        }
-
-
-        let pointerMoved =
-            false;
-
-
-        let pointerDownX =
-            0;
-
-
-        let pointerDownY =
-            0;
-
-
-        const DRAG_THRESHOLD =
-            6;
-
-
-        /*
-         * POINTER DOWN
-         */
-
-        this.boundFabPointerDown =
-            event => {
-
-                if (
-                    this.destroyed
-                ) {
-
-                    return;
-                }
-
-
-                if (
-                    event.pointerType === "mouse" &&
-                    event.button !== 0
-                ) {
-
-                    return;
-                }
-
-
-                this.isDraggingFab =
-                    true;
-
-
-                pointerMoved =
-                    false;
-
-
-                this.fabWasDragged =
-                    false;
-
-
-                pointerDownX =
-                    event.clientX;
-
-
-                pointerDownY =
-                    event.clientY;
-
-
-                const rect =
-                    this.fab.getBoundingClientRect();
-
-
-                this.fabDragOffsetX =
-                    event.clientX -
-                    rect.left;
-
-
-                this.fabDragOffsetY =
-                    event.clientY -
-                    rect.top;
-
-
-                this.fab.style.left =
-                    `${rect.left}px`;
-
-
-                this.fab.style.top =
-                    `${rect.top}px`;
-
-
-                this.fab.style.right =
-                    "auto";
-
-
-                this.fab.style.bottom =
-                    "auto";
-
-
-                try {
-
-                    this.fab.setPointerCapture(
-                        event.pointerId
-                    );
-
-                } catch {
-                    // Ignorar.
-                }
-            };
-
-
-        /*
-         * POINTER MOVE
-         */
-
-        this.boundFabPointerMove =
-            event => {
-
-                if (
-                    !this.isDraggingFab
-                ) {
-
-                    return;
-                }
-
-
-                const deltaX =
-                    Math.abs(
-                        event.clientX -
-                        pointerDownX
-                    );
-
-
-                const deltaY =
-                    Math.abs(
-                        event.clientY -
-                        pointerDownY
-                    );
-
-
-                if (
-                    !pointerMoved &&
-                    deltaX < DRAG_THRESHOLD &&
-                    deltaY < DRAG_THRESHOLD
-                ) {
-
-                    return;
-                }
-
-
-                pointerMoved =
-                    true;
-
-
-                this.fabWasDragged =
-                    true;
-
-
-                const width =
-                    this.fab.offsetWidth;
-
-
-                const height =
-                    this.fab.offsetHeight;
-
-
-                let left =
-                    event.clientX -
-                    this.fabDragOffsetX;
-
-
-                let top =
-                    event.clientY -
-                    this.fabDragOffsetY;
-
-
-                left =
-                    Math.max(
-                        0,
-                        Math.min(
-                            left,
-                            window.innerWidth -
-                            width
-                        )
-                    );
-
-
-                top =
-                    Math.max(
-                        0,
-                        Math.min(
-                            top,
-                            window.innerHeight -
-                            height
-                        )
-                    );
-
-
-                this.fab.style.left =
-                    `${left}px`;
-
-
-                this.fab.style.top =
-                    `${top}px`;
-
-
-                this.fab.style.right =
-                    "auto";
-
-
-                this.fab.style.bottom =
-                    "auto";
-
-
-                if (
-                    this.panel &&
-                    this.panel.classList.contains(
-                        "open"
-                    )
-                ) {
-
-                    this.updatePanelPosition();
-                }
-
-
-                if (
-                    event.cancelable
-                ) {
-
-                    event.preventDefault();
-                }
-            };
-
-
-        /*
-         * POINTER UP
-         */
-
-        this.boundFabPointerUp =
-            event => {
-
-                if (
-                    !this.isDraggingFab
-                ) {
-
-                    return;
-                }
-
-
-                this.isDraggingFab =
-                    false;
-
-
-                try {
-
-                    if (
-                        this.fab.hasPointerCapture(
-                            event.pointerId
-                        )
-                    ) {
-
-                        this.fab.releasePointerCapture(
-                            event.pointerId
-                        );
-                    }
-
-                } catch {
-                    // Ignorar.
-                }
-
-
-                if (pointerMoved) {
-
-                    this.saveFabPosition();
-
-
-                    if (
-                        this.panel &&
-                        this.panel.classList.contains(
-                            "open"
-                        )
-                    ) {
-
-                        this.updatePanelPosition();
-                    }
-
-
-                    setTimeout(
-                        () => {
-
-                            if (!this.destroyed) {
-
-                                this.fabWasDragged =
-                                    false;
-                            }
-
-                        },
-                        100
-                    );
-                }
-            };
-
-
-        /*
-         * POINTER CANCEL
-         */
-
-        this.boundFabPointerCancel =
-            event => {
-
-                if (
-                    !this.isDraggingFab
-                ) {
-
-                    return;
-                }
-
-
-                this.isDraggingFab =
-                    false;
-
-
-                this.saveFabPosition();
-
-
-                this.fabWasDragged =
-                    false;
-
-
-                try {
-
-                    if (
-                        this.fab.hasPointerCapture(
-                            event.pointerId
-                        )
-                    ) {
-
-                        this.fab.releasePointerCapture(
-                            event.pointerId
-                        );
-                    }
-
-                } catch {
-                    // Ignorar.
-                }
-            };
-
-
-        /*
-         * CLICK
-         */
-
-        this.boundFabClick =
-            event => {
-
-                if (
-                    this.fabWasDragged
-                ) {
-
-                    event.preventDefault();
-                    event.stopPropagation();
-
-                    return;
-                }
-
-
-                this.toggle();
-            };
-
-
-        /*
-         * Registrar listeners.
-         */
-
-        this.fab.addEventListener(
-            "pointerdown",
-            this.boundFabPointerDown
-        );
-
-
-        this.fab.addEventListener(
-            "pointermove",
-            this.boundFabPointerMove,
-            {
-                passive: false
-            }
-        );
-
-
-        this.fab.addEventListener(
-            "pointerup",
-            this.boundFabPointerUp
-        );
-
-
-        this.fab.addEventListener(
-            "pointercancel",
-            this.boundFabPointerCancel
-        );
-
-
-        this.fab.addEventListener(
-            "click",
-            this.boundFabClick
+    function clamp(value, min, max) {
+
+        return Math.min(
+            Math.max(value, min),
+            max
         );
     }
 
 
-    /*
-     * =========================================================
-     * PANEL POSITION
-     * =========================================================
-     */
+    /* =====================================================
+     * API PÚBLICA
+     * ===================================================== */
 
-    updatePanelPosition() {
+    return {
 
-        if (
-            !this.fab ||
-            !this.panel
-        ) {
+        openPanel,
 
-            return;
-        }
+        closePanel,
 
+        togglePanel,
 
-        const fabRect =
-            this.fab.getBoundingClientRect();
 
-
-        const panelWidth =
-            this.panel.offsetWidth ||
-            320;
-
-
-        const panelHeight =
-            this.panel.offsetHeight ||
-            400;
-
-
-        const gap =
-            10;
-
-
-        let left =
-            fabRect.left;
-
-
-        let top;
-
-
-        if (
-            fabRect.bottom +
-            gap +
-            panelHeight <=
-            window.innerHeight
-        ) {
-
-            top =
-                fabRect.bottom +
-                gap;
-
-        } else {
-
-            top =
-                fabRect.top -
-                panelHeight -
-                gap;
-        }
-
-
-        left =
-            Math.max(
-                8,
-                Math.min(
-                    left,
-                    window.innerWidth -
-                    panelWidth -
-                    8
-                )
-            );
-
-
-        top =
-            Math.max(
-                8,
-                Math.min(
-                    top,
-                    window.innerHeight -
-                    panelHeight -
-                    8
-                )
-            );
-
-
-        this.panel.style.left =
-            `${left}px`;
-
-
-        this.panel.style.top =
-            `${top}px`;
-
-
-        this.panel.style.right =
-            "auto";
-
-
-        this.panel.style.bottom =
-            "auto";
-    }
-
-
-    /*
-     * =========================================================
-     * PANEL
-     * =========================================================
-     */
-
-    toggle() {
-
-        if (!this.panel) {
-            return;
-        }
-
-
-        if (
-            this.panel.classList.contains(
-                "open"
-            )
-        ) {
-
-            this.close();
-
-        } else {
-
-            this.open();
-        }
-    }
-
-
-    open() {
-
-        if (
-            this.destroyed ||
-            !this.panel
-        ) {
-
-            return;
-        }
-
-
-        this.panel.classList.add(
-            "open"
-        );
-
-
-        requestAnimationFrame(
-            () => {
-
-                if (
-                    this.destroyed
-                ) {
-
-                    return;
-                }
-
-
-                this.updatePanelPosition();
-            }
-        );
-
-
-        if (this.searchInput) {
-
-            setTimeout(
-                () => {
-
-                    if (
-                        !this.destroyed &&
-                        this.searchInput
-                    ) {
-
-                        this.searchInput.focus();
-                    }
-
-                },
-                100
-            );
-        }
-    }
-
-
-    close() {
-
-        if (!this.panel) {
-            return;
-        }
-
-
-        this.panel.classList.remove(
-            "open"
-        );
-
-
-        this.hideSuggestions();
-    }
-
-
-    /*
-     * =========================================================
-     * MENÚ PRINCIPAL
-     * =========================================================
-     */
-
-    renderMenu() {
-
-        if (
-            this.destroyed ||
-            !this.panelBody
-        ) {
-
-            return;
-        }
-
-
-        this.currentView =
-            VIEWS.MENU;
-
-
-        this.activeViewInstance =
-            null;
-
-
-        this.panelBody.innerHTML =
-            "";
-
-
-        const toolbar =
-            document.createElement(
-                "div"
-            );
-
-
-        toolbar.className =
-            "tw3b-toolbar";
-
-
-        /*
-         * BÚSQUEDA
-         */
-
-        const searchWrapper =
-            document.createElement(
-                "div"
-            );
-
-
-        searchWrapper.className =
-            "tw3b-search-wrapper";
-
-
-        this.searchInput =
-            document.createElement(
-                "input"
-            );
-
-
-        this.searchInput.className =
-            "tw3b-search";
-
-
-        this.searchInput.type =
-            "text";
-
-
-        this.searchInput.placeholder =
-            "🔎 Buscar artículo...";
-
-
-        this.searchInput.autocomplete =
-            "off";
-
-
-        this.searchInput.addEventListener(
-            "input",
-            event => {
-
-                this.handleSearch(
-                    event.target.value
-                );
-            }
-        );
-
-
-        searchWrapper.appendChild(
-            this.searchInput
-        );
-
-
-        /*
-         * ICONOS
-         */
-
-        this.iconBar =
-            document.createElement(
-                "div"
-            );
-
-
-        this.iconBar.className =
-            "tw3b-icon-bar";
-
-
-        this.createIconButton({
-
-            icon: "🛡️",
-
-            title: "Auditoría",
-
-            view: VIEWS.AUDIT,
-
-            badge: true
-        });
-
-
-        this.createIconButton({
-
-            icon: "📜",
-
-            title: "Historial",
-
-            view: VIEWS.HISTORY
-        });
-
-
-        this.createIconButton({
-
-            icon: "⚙️",
-
-            title: "Configuración",
-
-            view: VIEWS.SETTINGS
-        });
-
-
-        toolbar.appendChild(
-            searchWrapper
-        );
-
-
-        toolbar.appendChild(
-            this.iconBar
-        );
-
-
-        this.panelBody.appendChild(
-            toolbar
-        );
-
-
-        this.refreshAlertBadge();
-    }
-
-
-    /*
-     * =========================================================
-     * BOTONES DE ICONOS
-     * =========================================================
-     */
-
-    createIconButton({
-        icon,
-        title,
-        view,
-        badge = false
-    }) {
-
-        const button =
-            document.createElement(
-                "button"
-            );
-
-
-        button.type =
-            "button";
-
-
-        button.className =
-            "tw3b-icon-button";
-
-
-        button.title =
-            title;
-
-
-        button.setAttribute(
-            "aria-label",
-            title
-        );
-
-
-        const iconElement =
-            document.createElement(
-                "span"
-            );
-
-
-        iconElement.className =
-            "tw3b-icon";
-
-
-        iconElement.textContent =
-            icon;
-
-
-        button.appendChild(
-            iconElement
-        );
-
-
-        if (badge) {
-
-            const badgeElement =
-                document.createElement(
-                    "span"
-                );
-
-
-            badgeElement.className =
-                "tw3b-icon-badge";
-
-
-            badgeElement.id =
-                "tw3b-alert-count";
-
-
-            badgeElement.textContent =
-                "0";
-
-
-            badgeElement.style.display =
-                "none";
-
-
-            button.appendChild(
-                badgeElement
-            );
-        }
-
-
-        button.addEventListener(
-            "click",
-            () => {
-
-                this.navigate(
-                    view
-                );
-            }
-        );
-
-
-        this.iconBar.appendChild(
-            button
-        );
-
-
-        return button;
-    }
-
-
-    /*
-     * =========================================================
-     * BÚSQUEDA
-     * =========================================================
-     */
-
-    handleSearch(query) {
-
-        if (
-            this.destroyed
-        ) {
-
-            return;
-        }
-
-
-        const searchModule =
-            this.views.search;
-
-
-        if (
-            !searchModule ||
-            typeof searchModule.onQuery !==
-            "function"
-        ) {
-
-            return;
-        }
-
-
-        searchModule.onQuery(
-
-            query,
-
-            this.ctx,
-
-            async item => {
-
-                await this.selectSearchItem(
-                    item
-                );
-            },
-
-            this.searchInput
-        );
-    }
-
-
-    /*
-     * =========================================================
-     * SELECCIÓN DE ARTÍCULO
-     * =========================================================
-     */
-
-    async selectSearchItem(item) {
-
-        if (
-            !item ||
-            this.destroyed
-        ) {
-
-            return;
-        }
-
-
-        this.hideSuggestions();
-
-
-        if (!this.ctx.scheduler) {
-
-            console.warn(
-                "[TornW3B] Scheduler todavía no está disponible."
-            );
-
-
-            return;
-        }
-
-
-        this.showLoading(
-            item.name
-        );
-
-
-        try {
-
-            console.log(
-                `[TornW3B] Auditoría prioritaria: ${item.name}`
-            );
-
-
-            const result =
-                await this.ctx.scheduler
-                    .getOrAudit(item);
-
-
-            if (!result) {
-
-                this.showError(
-                    item.name,
-                    "Este artículo no puede ser auditado por Torn."
-                );
-
-
-                return;
-            }
-
-
-            await this.navigate(
-                VIEWS.SALE,
-                {
-                    item,
-                    audit: result
-                }
-            );
-
-
-        } catch (error) {
-
-            console.error(
-                `[TornW3B] Error procesando ${item.name}:`,
-                error
-            );
-
-
-            this.showError(
-                item.name,
-                error?.message ||
-                "No se pudo auditar el artículo."
-            );
-        }
-    }
-
-
-    /*
-     * =========================================================
-     * LOADING
-     * =========================================================
-     */
-
-    showLoading(itemName) {
-
-        if (
-            this.destroyed ||
-            !this.panelBody
-        ) {
-
-            return;
-        }
-
-
-        this.panelBody.innerHTML = `
-
-            <div class="tw3b-loading">
-
-                <div class="tw3b-card-title">
-                    ${escapeHtml(itemName)}
-                </div>
-
-                <div class="tw3b-skeleton"></div>
-
-                <div class="tw3b-loading-text">
-                    🔄 Analizando mercado...
-                </div>
-
-            </div>
-
-        `;
-    }
-
-
-    /*
-     * =========================================================
-     * ERROR
-     * =========================================================
-     */
-
-    showError(
-        itemName,
-        message
-    ) {
-
-        if (
-            this.destroyed ||
-            !this.panelBody
-        ) {
-
-            return;
-        }
-
-
-        this.panelBody.innerHTML = `
-
-            <div class="tw3b-error-view">
-
-                <div class="tw3b-card-title">
-                    ${escapeHtml(itemName)}
-                </div>
-
-                <div class="tw3b-error">
-                    ${escapeHtml(message)}
-                </div>
-
-                <button
-                    type="button"
-                    class="tw3b-button"
-                    data-action="back-menu"
-                >
-                    ← Volver
-                </button>
-
-            </div>
-
-        `;
-
-
-        const back =
-            this.panelBody.querySelector(
-                '[data-action="back-menu"]'
-            );
-
-
-        if (back) {
-
-            back.addEventListener(
-                "click",
-                () => {
-
-                    this.renderMenu();
-
-                }
-            );
-        }
-    }
-
-
-    /*
-     * =========================================================
-     * NAVEGACIÓN
-     * =========================================================
-     */
-
-    async navigate(
-        viewName,
-        params = {}
-    ) {
-
-        if (
-            this.destroyed
-        ) {
-
-            return;
-        }
-
-
-        if (
-            this.activeViewInstance &&
-            typeof this.activeViewInstance.destroy ===
-            "function"
-        ) {
-
-            this.activeViewInstance.destroy();
-        }
-
-
-        this.activeViewInstance =
-            null;
-
-
-        this.currentView =
-            viewName;
-
-
-        this.hideSuggestions();
-
-
-        this.panelBody.innerHTML =
-            "";
-
-
-        if (
-            viewName ===
-            VIEWS.MENU
-        ) {
-
-            this.renderMenu();
-
-            return;
-        }
-
-
-        const view =
-            this.views[viewName];
-
-
-        if (
-            !view ||
-            typeof view.render !==
-            "function"
-        ) {
-
-            this.showError(
-                "TornW3B",
-                `Vista "${viewName}" no disponible.`
-            );
-
-
-            return;
-        }
-
-
-        /*
-         * Botón volver.
-         */
-
-        const back =
-            document.createElement(
-                "button"
-            );
-
-
-        back.type =
-            "button";
-
-
-        back.className =
-            "tw3b-back";
-
-
-        back.innerHTML =
-            "←";
-
-
-        back.title =
-            "Volver";
-
-
-        back.setAttribute(
-            "aria-label",
-            "Volver"
-        );
-
-
-        back.addEventListener(
-            "click",
-            () => {
-
-                this.navigate(
-                    VIEWS.MENU
-                );
-            }
-        );
-
-
-        this.panelBody.appendChild(
-            back
-        );
-
-
-        /*
-         * Contenedor.
-         */
-
-        const container =
-            document.createElement(
-                "div"
-            );
-
-
-        container.className =
-            "tw3b-view-container";
-
-
-        this.panelBody.appendChild(
-            container
-        );
-
-
-        /*
-         * Renderizar vista.
-         */
-
-        this.activeViewInstance =
-            await view.render(
-
-                container,
-
-                this.ctx,
-
-                (
-                    nextView,
-                    nextParams
-                ) => {
-
-                    this.navigate(
-                        nextView,
-                        nextParams
-                    );
-                },
-
-                params
-
-            ) || null;
-
-
-        /*
-         * Recalcular posición.
-         */
-
-        if (
-            this.panel &&
-            this.panel.classList.contains(
-                "open"
-            )
-        ) {
-
-            requestAnimationFrame(
-                () => {
-
-                    if (
-                        !this.destroyed
-                    ) {
-
-                        this.updatePanelPosition();
-                    }
-                }
-            );
-        }
-    }
-
-
-    /*
-     * =========================================================
-     * SUGERENCIAS
-     * =========================================================
-     */
-
-    hideSuggestions() {
-
-        const suggestions =
-            document.getElementById(
-                "tw3b-suggestions"
-            );
-
-
-        if (suggestions) {
-
-            suggestions.style.display =
-                "none";
-        }
-    }
-
-
-    /*
-     * =========================================================
-     * BADGE DE AUDITORÍA
-     * =========================================================
-     */
-
-    async refreshAlertBadge() {
-
-        if (
-            this.destroyed ||
-            !this.ctx.storage
-        ) {
-
-            return;
-        }
-
-
-        try {
-
-            const audits =
-                await this.ctx.storage
-                    .getAllAudits();
-
-
-            const alertCount =
-                Object.values(audits)
-                    .filter(
-                        audit =>
-                            audit &&
-                            (
-                                audit.status ===
-                                "RED" ||
-
-                                audit.status ===
-                                "YELLOW"
-                            )
-                    )
-                    .length;
-
+        destroy() {
 
             if (
-                !this.panelBody
+                currentView &&
+                typeof currentView.destroy === "function"
             ) {
 
-                return;
+                try {
+
+                    currentView.destroy();
+
+                } catch {
+                    // Ignorar.
+                }
             }
 
+            closeQuickBar();
 
-            const badge =
-                this.panelBody.querySelector(
-                    "#tw3b-alert-count"
-                );
+            fab.remove();
 
+            overlay.remove();
 
-            if (badge) {
-
-                badge.textContent =
-                    String(alertCount);
-
-
-                badge.style.display =
-                    alertCount > 0
-                        ? "flex"
-                        : "none";
-            }
-
-
-            if (this.fab) {
-
-                this.fab.classList.toggle(
-                    "has-alerts",
-                    alertCount > 0
-                );
-            }
-
-
-        } catch (error) {
-
-            console.warn(
-                "[TornW3B] No se pudo actualizar badge:",
-                error
-            );
+            quickBar.remove();
         }
-    }
+    };
 }
-
-
-/*
- * =========================================================
- * UTILIDAD
- * =========================================================
- */
-
-function escapeHtml(str) {
-
-    const div =
-        document.createElement(
-            "div"
-        );
-
-
-    div.textContent =
-        String(str ?? "");
-
-
-    return div.innerHTML;
-}
-
-
-export {
-    VIEWS
-};

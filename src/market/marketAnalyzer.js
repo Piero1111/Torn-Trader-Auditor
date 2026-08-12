@@ -1,8 +1,10 @@
 import {
     weightedMean,
     weightedMedian,
-    calculateDispersion
+    calculateDispersion,
+    filterPriceOutliers
 } from "./statistics.js";
+
 
 export class MarketAnalyzer {
 
@@ -19,66 +21,91 @@ export class MarketAnalyzer {
 
     analyze(rawListings) {
 
-        /*
-         * =====================================================
-         * VALIDAR LISTINGS
-         * =====================================================
-         */
-
         if (!Array.isArray(rawListings)) {
             return null;
         }
 
 
-        const listings =
+        let listings =
             rawListings
 
-                .map(listing => {
+                .map((listing, index) => {
 
                     const price =
                         Number(listing?.price);
 
-                    const amount =
-                        Number(listing?.amount);
+
+                    const quantity =
+                        Number(listing?.quantity);
+
 
                     if (
                         !Number.isFinite(price) ||
-                        !Number.isFinite(amount) ||
+                        !Number.isFinite(quantity) ||
                         price <= 0 ||
-                        amount <= 0
+                        quantity <= 0
                     ) {
+
                         return null;
                     }
 
+
                     return {
+
+                        ...listing,
+
                         price,
-                        amount
+
+                        quantity,
+
+                        originalIndex:
+                            index
                     };
                 })
 
-                .filter(Boolean)
 
-                .sort(
-                    (a, b) =>
-                        a.price - b.price
-                );
+                .filter(Boolean);
 
 
-        if (listings.length === 0) {
+        if (
+            listings.length === 0
+        ) {
+
             return null;
         }
 
 
         /*
          * =====================================================
-         * CANTIDAD TOTAL DEL MERCADO
+         * FILTRAR OUTLIERS
          * =====================================================
+         *
+         * Protección adicional: aunque el muestreo por precio
+         * más bajo ya reduce el impacto de listados troleados
+         * (quedan al final, fuera de la muestra), un listado
+         * con precio anormalmente BAJO (ej. error de tecleo)
+         * sí podría colarse en la muestra "más barata" y
+         * arrastrar el resultado hacia abajo. Ver
+         * statistics.js → filterPriceOutliers().
          */
+
+        listings =
+            filterPriceOutliers(
+                listings
+            );
+
+
+        listings =
+            listings.sort(
+                (a, b) =>
+                    a.price - b.price
+            );
+
 
         const totalQuantity =
             listings.reduce(
                 (sum, listing) =>
-                    sum + listing.amount,
+                    sum + listing.quantity,
                 0
             );
 
@@ -87,43 +114,20 @@ export class MarketAnalyzer {
             !Number.isFinite(totalQuantity) ||
             totalQuantity <= 0
         ) {
+
             return null;
         }
 
 
-        /*
-         * =====================================================
-         * TAMAÑO DE MUESTRA
-         * =====================================================
-         *
-         * Tomamos el 10% de las unidades disponibles,
-         * comenzando desde las publicaciones más baratas.
-         *
-         * Ejemplo:
-         *
-         * Mercado = 10,000 unidades
-         *
-         * 10% = 1,000 unidades
-         *
-         * Analizamos las primeras 1,000 unidades.
-         */
-
-        const sampleTarget =
-            totalQuantity *
-            this.samplePercentage;
-
-
         const targetQuantity =
-            Math.max(
-                1,
-                Math.ceil(sampleTarget)
-            );
+            totalQuantity * 0.10;
 
 
-        const sample = [];
+        let accumulatedQuantity =
+            0;
 
-        let remaining =
-            targetQuantity;
+        let requiredListings =
+            0;
 
 
         for (
@@ -131,79 +135,100 @@ export class MarketAnalyzer {
             of listings
         ) {
 
+            accumulatedQuantity +=
+                listing.quantity;
+
+            requiredListings += 1;
+
             if (
-                remaining <= 0
+                accumulatedQuantity >=
+                targetQuantity
             ) {
+
                 break;
             }
-
-
-            const quantity =
-                Math.min(
-                    listing.amount,
-                    remaining
-                );
-
-
-            if (
-                quantity <= 0
-            ) {
-                continue;
-            }
-
-
-            sample.push({
-                price:
-                    listing.price,
-
-                amount:
-                    quantity
-            });
-
-
-            remaining -=
-                quantity;
         }
 
 
-        /*
-         * Cantidad realmente utilizada.
-         *
-         * Normalmente será igual al target,
-         * pero no debemos asumirlo.
-         */
+        if (
+            requiredListings <= 0
+        ) {
+
+            return null;
+        }
+
+
+        const sampleListingsCount =
+            requiredListings;
+
+
+        const sellerSampleSize =
+            Math.min(
+                listings.length,
+                Math.max(
+                    Math.ceil(
+                        sampleListingsCount *
+                        0.10
+                    ),
+                    5
+                )
+            );
+
+
+        const selectedListings =
+            listings.slice(
+                0,
+                sellerSampleSize
+            );
+
+
+        if (
+            selectedListings.length === 0
+        ) {
+
+            return null;
+        }
+
 
         const sampleQuantity =
-            sample.reduce(
+            selectedListings.reduce(
                 (sum, listing) =>
-                    sum + listing.amount,
+                    sum + listing.quantity,
                 0
             );
 
 
         if (
-            sample.length === 0 ||
+            !Number.isFinite(sampleQuantity) ||
             sampleQuantity <= 0
         ) {
+
             return null;
         }
 
 
-        /*
-         * =====================================================
-         * ESTADÍSTICAS
-         * =====================================================
-         */
+        const statisticalSample =
+            selectedListings.map(
+                listing => ({
+
+                    price:
+                        listing.price,
+
+                    amount:
+                        listing.quantity
+                })
+            );
+
 
         const mean =
             weightedMean(
-                sample
+                statisticalSample
             );
 
 
         const median =
             weightedMedian(
-                sample
+                statisticalSample
             );
 
 
@@ -211,15 +236,10 @@ export class MarketAnalyzer {
             !Number.isFinite(mean) ||
             !Number.isFinite(median)
         ) {
+
             return null;
         }
 
-
-        /*
-         * =====================================================
-         * DISPERSIÓN
-         * =====================================================
-         */
 
         const dispersion =
             calculateDispersion(
@@ -227,24 +247,6 @@ export class MarketAnalyzer {
                 median
             );
 
-
-        /*
-         * =====================================================
-         * REAL MARKET VALUE
-         * =====================================================
-         *
-         * Cuando media y mediana están cerca:
-         *
-         *     Real Market Value =
-         *     (Mean + Median) / 2
-         *
-         * Cuando existe mucha diferencia:
-         *
-         *     Real Market Value = Median
-         *
-         * Esto evita que precios extremos
-         * distorsionen demasiado el resultado.
-         */
 
         let realMarketValue;
 
@@ -268,15 +270,10 @@ export class MarketAnalyzer {
             !Number.isFinite(realMarketValue) ||
             realMarketValue <= 0
         ) {
+
             return null;
         }
 
-
-        /*
-         * =====================================================
-         * CONFIANZA
-         * =====================================================
-         */
 
         const confidence =
             this.calculateConfidence({
@@ -288,6 +285,10 @@ export class MarketAnalyzer {
                 listingsCount:
                     listings.length,
 
+                sampleListingsCount,
+
+                sellerSampleSize,
+
                 dispersion
             });
 
@@ -295,6 +296,23 @@ export class MarketAnalyzer {
         return {
 
             totalQuantity,
+
+            listingsCount:
+                listings.length,
+
+            targetQuantity,
+
+            requiredListings:
+                sampleListingsCount,
+
+            accumulatedQuantity,
+
+            sampleListingsCount,
+
+            sellerSampleSize,
+
+            sampleSize:
+                sellerSampleSize,
 
             sampleQuantity,
 
@@ -308,26 +326,60 @@ export class MarketAnalyzer {
 
             realMarketValue,
 
-            confidence
+            confidence,
+
+            sampleListings:
+                selectedListings.map(
+                    listing => ({
+
+                        uid:
+                            listing.uid ?? null,
+
+                        playerId:
+                            listing.player_id ??
+                            null,
+
+                        playerName:
+                            listing.player_name ??
+                            null,
+
+                        price:
+                            listing.price,
+
+                        quantity:
+                            listing.quantity,
+
+                        contentUpdated:
+                            listing.content_updated ??
+                            null,
+
+                        lastChecked:
+                            listing.last_checked ??
+                            null
+                    })
+                )
         };
     }
 
 
     calculateConfidence({
+
         totalQuantity,
+
         sampleQuantity,
+
         listingsCount,
+
+        sampleListingsCount,
+
+        sellerSampleSize,
+
         dispersion
+
     }) {
 
         let score = 0;
 
-
-        /*
-         * =====================================================
-         * CANTIDAD TOTAL
-         * =====================================================
-         */
 
         if (
             totalQuantity >= 10000
@@ -355,12 +407,6 @@ export class MarketAnalyzer {
         }
 
 
-        /*
-         * =====================================================
-         * TAMAÑO DE MUESTRA
-         * =====================================================
-         */
-
         if (
             sampleQuantity >= 1000
         ) {
@@ -387,12 +433,6 @@ export class MarketAnalyzer {
         }
 
 
-        /*
-         * =====================================================
-         * NÚMERO DE PUBLICACIONES
-         * =====================================================
-         */
-
         if (
             listingsCount >= 50
         ) {
@@ -413,11 +453,31 @@ export class MarketAnalyzer {
         }
 
 
-        /*
-         * =====================================================
-         * DISPERSIÓN
-         * =====================================================
-         */
+        if (
+            sellerSampleSize >= 10
+        ) {
+
+            score += 10;
+
+        } else if (
+            sellerSampleSize >= 5
+        ) {
+
+            score += 7;
+
+        } else if (
+            sellerSampleSize >= 3
+        ) {
+
+            score += 5;
+
+        } else if (
+            sellerSampleSize >= 2
+        ) {
+
+            score += 3;
+        }
+
 
         if (
             Number.isFinite(dispersion)
@@ -444,9 +504,26 @@ export class MarketAnalyzer {
         }
 
 
+        if (
+            sampleListingsCount <= 1
+        ) {
+
+            score *= 0.65;
+
+        } else if (
+            sampleListingsCount <= 2
+        ) {
+
+            score *= 0.80;
+        }
+
+
         return Math.min(
             100,
-            Math.max(0, score)
+            Math.max(
+                0,
+                Math.round(score)
+            )
         );
     }
 }

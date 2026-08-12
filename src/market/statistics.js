@@ -76,3 +76,122 @@ export function calculateDispersion(mean, median) {
 
     return Math.abs(mean - median) / median;
 }
+
+
+/*
+ * =============================================================
+ * FILTRO DE OUTLIERS DE PRECIO
+ * =============================================================
+ *
+ * Torn permite (y es común) que traders pongan precios
+ * absurdos en bazares/mercado: trolleo, listados "de reserva",
+ * errores de tecleo con ceros de más. Como los promedios están
+ * ponderados por cantidad, UN SOLO listado disparatado puede
+ * arrastrar weightedMean a cifras sin sentido (ej: un ítem de
+ * $8,929 mostrando un "Mercado real" de $960,851).
+ *
+ * Estrategia:
+ *
+ *   1. Calculamos una mediana "cruda" (no ponderada) de los
+ *      precios, como ancla robusta (la mediana no se deja
+ *      arrastrar por un solo outlier, a diferencia del
+ *      promedio).
+ *
+ *   2. Descartamos listados cuyo precio esté a más de
+ *      `multiplier` veces por encima o por debajo de esa
+ *      mediana.
+ *
+ *   3. Si el filtro eliminara TODA la muestra (mercado
+ *      genuinamente caótico), preferimos conservar el
+ *      conjunto original antes que quedarnos sin datos:
+ *      es responsabilidad de la capa de confianza penalizar
+ *      esa dispersión, no de este filtro borrar todo.
+ *
+ * @param {Array<{price:number, amount?:number, quantity?:number}>} listings
+ * @param {Object} [options]
+ * @param {number} [options.multiplier=6]
+ * @param {number} [options.minSampleSize=3] - por debajo de este
+ *        tamaño no filtramos (poca muestra ya es poco confiable
+ *        por sí sola; no tiene sentido además recortarla).
+ */
+
+export function filterPriceOutliers(
+    listings,
+    {
+        multiplier = 6,
+        minSampleSize = 3
+    } = {}
+) {
+
+    if (
+        !Array.isArray(listings) ||
+        listings.length < minSampleSize
+    ) {
+
+        return listings;
+    }
+
+
+    const prices =
+        listings
+            .map(listing => Number(listing.price))
+            .filter(price =>
+                Number.isFinite(price) &&
+                price > 0
+            )
+            .sort((a, b) => a - b);
+
+
+    if (prices.length < minSampleSize) {
+
+        return listings;
+    }
+
+
+    const mid =
+        Math.floor(prices.length / 2);
+
+    const median =
+        prices.length % 2 === 0
+            ? (prices[mid - 1] + prices[mid]) / 2
+            : prices[mid];
+
+
+    if (
+        !Number.isFinite(median) ||
+        median <= 0
+    ) {
+
+        return listings;
+    }
+
+
+    const upperBound =
+        median * multiplier;
+
+    const lowerBound =
+        median / multiplier;
+
+
+    const filtered =
+        listings.filter(listing => {
+
+            const price =
+                Number(listing.price);
+
+            return (
+                Number.isFinite(price) &&
+                price >= lowerBound &&
+                price <= upperBound
+            );
+        });
+
+
+    if (filtered.length === 0) {
+
+        return listings;
+    }
+
+
+    return filtered;
+}

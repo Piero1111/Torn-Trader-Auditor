@@ -1,264 +1,430 @@
+/*
+ * =============================================================
+ * SEARCH.JS
+ * =============================================================
+ *
+ * Componente de búsqueda reutilizable.
+ *
+ * Usado en:
+ *
+ *   - Menú principal      → busca en Pricelist  → Venta
+ *   - Auditor (lista)     → busca en Pricelist  → Auditor Producto
+ *   - Historial (general) → busca en Pricelist  → Historial Producto
+ *
+ * Responsabilidad única: capturar texto del usuario y notificar
+ * mediante `onSearch(query)` cuando corresponde.
+ *
+ * NO decide qué hacer con los resultados: eso lo maneja
+ * cada vista que lo instancia.
+ *
+ * Reglas:
+ *
+ *   - No se dispara onSearch mientras query.length está entre
+ *     1 y (CONFIG.SEARCH_MIN_LENGTH - 1).
+ *   - query.length === 0 SIEMPRE dispara onSearch("") para que
+ *     la vista pueda limpiar resultados.
+ *   - Debounce de 150ms para no recalcular en cada tecla.
+ * =============================================================
+ */
 
 import { CONFIG } from "../config.js";
-import { formatMoney } from "./styles.js";
-
-const SUGGESTIONS_ID = "tw3b-suggestions";
-
-let debounceHandle = null;
+import { el } from "./styles.js";
 
 
-function getSuggestionsContainer(anchorEl) {
+/* =============================================================
+ * CREAR BARRA DE BÚSQUEDA
+ * =============================================================
+ *
+ * @param {Object} options
+ * @param {string} options.placeholder
+ * @param {Function} options.onSearch  (query: string) => void
+ * @param {string} [options.autofocus]
+ *
+ * @returns {{ node: HTMLElement, destroy: Function, clear: Function, focus: Function }}
+ */
 
-    let el =
-        document.getElementById(
-            SUGGESTIONS_ID
-        );
+export function createSearchBar({
+    placeholder = "Buscar artículo...",
+    onSearch,
+    autofocus = false
+}) {
+
+    let debounceHandle =
+        null;
 
 
-    if (!el) {
+    const input =
+        el("input", {
 
-        el =
-            document.createElement("div");
+            className:
+                "tw3b-search-input",
 
-        el.id =
-            SUGGESTIONS_ID;
+            attrs: {
 
-        el.className =
-            "tw3b-suggestions";
+                type:
+                    "text",
+
+                placeholder,
+
+                autocomplete:
+                    "off",
+
+                autocapitalize:
+                    "off",
+
+                spellcheck:
+                    "false"
+            }
+        });
 
 
-        anchorEl.insertAdjacentElement(
-            "afterend",
-            el
+    /*
+     * =====================================================
+     * MANEJADOR DE INPUT
+     * =====================================================
+     */
+
+    const handleInput = () => {
+
+        const query =
+            input.value
+                .trim();
+
+
+        if (debounceHandle) {
+
+            clearTimeout(
+                debounceHandle
+            );
+        }
+
+
+        /*
+         * Limpiar resultados inmediatamente,
+         * sin esperar debounce.
+         */
+
+        if (query.length === 0) {
+
+            if (
+                typeof onSearch ===
+                "function"
+            ) {
+
+                onSearch("");
+            }
+
+            return;
+        }
+
+
+        /*
+         * Todavía no alcanza el mínimo
+         * de caracteres.
+         */
+
+        if (
+            query.length < CONFIG.SEARCH_MIN_LENGTH
+        ) {
+
+            return;
+        }
+
+
+        debounceHandle =
+            setTimeout(
+                () => {
+
+                    if (
+                        typeof onSearch ===
+                        "function"
+                    ) {
+
+                        onSearch(
+                            query
+                        );
+                    }
+                },
+                150
+            );
+    };
+
+
+    input.addEventListener(
+        "input",
+        handleInput
+    );
+
+
+    /*
+     * =====================================================
+     * ÍCONO
+     * =====================================================
+     */
+
+    const icon =
+        el("span", {
+
+            text:
+                "🔎",
+
+            style: {
+                fontSize: "14px",
+                opacity: "0.7"
+            }
+        });
+
+
+    /*
+     * =====================================================
+     * BOTÓN LIMPIAR (aparece solo con texto)
+     * =====================================================
+     */
+
+    const clearButton =
+        el("span", {
+
+            text:
+                "✕",
+
+            style: {
+                fontSize:
+                    "13px",
+                color:
+                    "#6b7280",
+                cursor:
+                    "pointer",
+                display:
+                    "none",
+                padding:
+                    "2px 4px"
+            },
+
+            on: {
+
+                click: () => {
+
+                    input.value =
+                        "";
+
+                    clearButton.style.display =
+                        "none";
+
+                    handleInput();
+
+                    input.focus();
+                }
+            }
+        });
+
+
+    input.addEventListener(
+        "input",
+        () => {
+
+            clearButton.style.display =
+                input.value.length > 0
+                    ? "flex"
+                    : "none";
+        }
+    );
+
+
+    const wrap =
+        el("div", {
+
+            className:
+                "tw3b-search-wrap"
+
+        }, [
+            icon,
+            input,
+            clearButton
+        ]);
+
+
+    /*
+     * =====================================================
+     * AUTOFOCUS
+     * =====================================================
+     *
+     * Se aplica en el siguiente tick para asegurar que
+     * el nodo ya esté insertado en el DOM.
+     */
+
+    if (autofocus) {
+
+        setTimeout(
+            () => {
+
+                try {
+
+                    input.focus();
+
+                } catch {
+                    // Ignorar: puede fallar si el nodo
+                    // fue removido antes del tick.
+                }
+            },
+            0
         );
     }
 
 
-    return el;
+    /*
+     * =====================================================
+     * API PÚBLICA
+     * =====================================================
+     */
+
+    return {
+
+        node:
+            wrap,
+
+
+        clear() {
+
+            input.value =
+                "";
+
+            clearButton.style.display =
+                "none";
+        },
+
+
+        focus() {
+
+            input.focus();
+        },
+
+
+        destroy() {
+
+            if (debounceHandle) {
+
+                clearTimeout(
+                    debounceHandle
+                );
+            }
+
+            input.removeEventListener(
+                "input",
+                handleInput
+            );
+        }
+    };
 }
 
 
-function renderSuggestions(
-    container,
+/* =============================================================
+ * LISTA DE RESULTADOS DE BÚSQUEDA
+ * =============================================================
+ *
+ * Fábrica auxiliar para pintar los resultados debajo de la
+ * barra. No hace fetch ni busca nada: solo recibe `items`
+ * (ya filtrados por Pricelist.search()) y los pinta.
+ *
+ * @param {Array} items          - resultado de pricelist.search()
+ * @param {Function} onSelect    - (item) => void
+ * @param {Function} [getPrefix] - (item) => string (ej: emoji de estado)
+ */
+
+export function renderSearchResults({
     items,
-    onSelect
-) {
+    onSelect,
+    getPrefix = null
+}) {
 
-    container.innerHTML = "";
+    const container =
+        el("div", {
+
+            style: {
+                display:
+                    "flex",
+                flexDirection:
+                    "column"
+            }
+        });
 
 
-    if (!items.length) {
+    if (
+        !Array.isArray(items) ||
+        items.length === 0
+    ) {
 
-        container.style.display =
-            "none";
-
-        return;
+        return container;
     }
-
-
-    container.style.display =
-        "block";
 
 
     for (const item of items) {
 
+        const prefix =
+            typeof getPrefix ===
+            "function"
+                ? getPrefix(item)
+                : null;
+
+
         const row =
-            document.createElement("div");
+            el("div", {
 
+                className:
+                    "tw3b-list-item",
 
-        row.className =
-            "tw3b-suggestion-item";
+                attrs: {
+                    role: "button"
+                },
 
+                on: {
 
-        row.innerHTML = `
-            <span class="tw3b-suggestion-name">
-                ${escapeHtml(item.name)}
-            </span>
-
-            <span class="tw3b-suggestion-price">
-                ${formatMoney(item.buyPrice)}
-            </span>
-        `;
-
-
-        row.addEventListener(
-            "click",
-            () => {
-
-                container.style.display =
-                    "none";
-
-                onSelect(item);
-            }
-        );
-
-
-        container.appendChild(row);
-    }
-}
-
-
-function escapeHtml(str) {
-
-    const div =
-        document.createElement("div");
-
-
-    div.textContent =
-        String(str ?? "");
-
-
-    return div.innerHTML;
-}
-
-
-export const search = {
-
-    /*
-     * =====================================================
-     * BÚSQUEDA LOCAL
-     * =====================================================
-     *
-     * La búsqueda solamente consulta la pricelist
-     * cacheada.
-     *
-     * NO realiza requests a Torn.
-     * NO realiza auditorías.
-     *
-     * La auditoría se ejecuta únicamente después
-     * de seleccionar un artículo y a través del
-     * Scheduler.
-     */
-
-    onQuery(
-        query,
-        ctx,
-        onSelect,
-        anchorEl
-    ) {
-
-        clearTimeout(
-            debounceHandle
-        );
-
-
-        const container =
-            getSuggestionsContainer(
-                anchorEl
-            );
-
-
-        const normalizedQuery =
-            String(query ?? "")
-                .trim();
-
-
-        /*
-         * Si la búsqueda está vacía o es demasiado
-         * corta, ocultamos inmediatamente.
-         */
-
-        if (
-            normalizedQuery.length <
-            CONFIG.SEARCH_MIN_LENGTH
-        ) {
-
-            container.innerHTML = "";
-
-            container.style.display =
-                "none";
-
-            return;
-        }
-
-
-        /*
-         * Las dependencias pueden todavía estar
-         * inicializándose.
-         */
-
-        if (
-            !ctx?.pricelist ||
-            typeof ctx.pricelist.search !==
-                "function"
-        ) {
-
-            container.innerHTML = `
-                <div class="tw3b-card-sub">
-                    Cargando pricelist...
-                </div>
-            `;
-
-            container.style.display =
-                "block";
-
-            return;
-        }
-
-
-        /*
-         * Debounce para evitar ejecutar búsquedas
-         * continuamente mientras el usuario escribe.
-         */
-
-        debounceHandle =
-            setTimeout(
-                async () => {
-
-                    try {
-
-                        /*
-                         * Verificamos nuevamente que
-                         * la pricelist siga disponible.
-                         */
+                    click: () => {
 
                         if (
-                            !ctx?.pricelist ||
-                            typeof ctx.pricelist.search !==
-                                "function"
+                            typeof onSelect ===
+                            "function"
                         ) {
 
-                            container.style.display =
-                                "none";
-
-                            return;
-                        }
-
-
-                        const results =
-                            await ctx.pricelist.search(
-                                normalizedQuery
+                            onSelect(
+                                item
                             );
-
-
-                        /*
-                         * Mostrar solamente las primeras
-                         * 8 coincidencias.
-                         */
-
-                        renderSuggestions(
-                            container,
-                            results.slice(0, 8),
-                            onSelect
-                        );
-
-
-                    } catch (error) {
-
-                        console.error(
-                            "[TornW3B] Error buscando artículo:",
-                            error
-                        );
-
-
-                        container.innerHTML = "";
-
-                        container.style.display =
-                            "none";
+                        }
                     }
+                }
 
-                },
-                200
-            );
+            }, [
+
+                prefix
+                    ? el("span", {
+                        text: prefix
+                    })
+                    : null,
+
+                el("div", {
+
+                    className:
+                        "tw3b-list-item-name",
+
+                    text:
+                        item.name
+                }),
+
+                el("span", {
+
+                    className:
+                        "tw3b-list-item-chevron",
+
+                    text:
+                        "›"
+                })
+            ]);
+
+
+        container.appendChild(
+            row
+        );
     }
-};
+
+
+    return container;
+}

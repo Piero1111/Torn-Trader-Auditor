@@ -27,6 +27,11 @@ export class Storage {
 
         this.historyKey =
             `${PREFIX}history`;
+        this.auditHistoryKey =
+            `${PREFIX}audit_history`;
+
+        this.internalPriceKey =
+            `${PREFIX}internal_prices`;
 
         this.engine =
             hasGM()
@@ -245,11 +250,20 @@ export class Storage {
 
     async saveAudit(audit) {
 
+        const itemId =
+            Number(audit?.itemId);
+
+
+        /*
+         * Un itemId válido debe ser:
+         *
+         * - entero
+         * - mayor que 0
+         */
+
         if (
-            !audit ||
-            !Number.isFinite(
-                Number(audit.itemId)
-            )
+            !Number.isInteger(itemId) ||
+            itemId <= 0
         ) {
 
             throw new Error(
@@ -265,9 +279,8 @@ export class Storage {
             );
 
 
-        audits[
-            Number(audit.itemId)
-        ] = audit;
+        audits[itemId] =
+            audit;
 
 
         await this.write(
@@ -287,7 +300,8 @@ export class Storage {
 
 
         if (
-            !Number.isFinite(numericId)
+            !Number.isInteger(numericId) ||
+            numericId <= 0
         ) {
 
             return null;
@@ -329,11 +343,20 @@ export class Storage {
 
     async saveHistory(audit) {
 
+        const itemId =
+            Number(audit?.itemId);
+
+
+        /*
+         * Un itemId válido debe ser:
+         *
+         * - entero
+         * - mayor que 0
+         */
+
         if (
-            !audit ||
-            !Number.isFinite(
-                Number(audit.itemId)
-            )
+            !Number.isInteger(itemId) ||
+            itemId <= 0
         ) {
 
             throw new Error(
@@ -347,10 +370,6 @@ export class Storage {
                 this.historyKey,
                 {}
             );
-
-
-        const itemId =
-            Number(audit.itemId);
 
 
         if (
@@ -422,7 +441,8 @@ export class Storage {
 
 
         if (
-            !Number.isFinite(numericId)
+            !Number.isInteger(numericId) ||
+            numericId <= 0
         ) {
 
             return [];
@@ -441,6 +461,233 @@ export class Storage {
         )
             ? history[numericId]
             : [];
+    }
+    /*
+     * =========================================================
+     * HISTORIAL CRUDO POR AUDITORÍA (INTRADÍA)
+     * =========================================================
+     *
+     * A diferencia de saveHistory() (máximo 1 snapshot/día),
+     * este guarda TODAS las auditorías, sin deduplicar.
+     *
+     * Solo se conserva una ventana corta (AUDIT_HISTORY_HOURS)
+     * para no acumular datos indefinidamente: sirve
+     * exclusivamente para graficar variación intradía.
+     */
+
+    async saveAuditHistory(audit) {
+
+        const itemId =
+            Number(audit?.itemId);
+
+
+        if (
+            !Number.isInteger(itemId) ||
+            itemId <= 0
+        ) {
+
+            throw new Error(
+                "No se puede guardar historial de auditoría sin itemId válido."
+            );
+        }
+
+
+        const store =
+            await this.read(
+                this.auditHistoryKey,
+                {}
+            );
+
+
+        if (
+            !Array.isArray(
+                store[itemId]
+            )
+        ) {
+
+            store[itemId] = [];
+        }
+
+
+        store[itemId].push({
+
+            timestamp:
+                Number(audit.timestamp) ||
+                Date.now(),
+
+            realMarketValue:
+                Number(audit.realMarketValue) ||
+                null,
+
+            correctBuyPrice:
+                Number(audit.correctBuyPrice) ||
+                null,
+
+            w3bBuyPrice:
+                Number(audit.w3bBuyPrice) ||
+                null,
+
+            learnedRatio:
+                Number(audit.learnedRatio) ||
+                null,
+
+            observedRatio:
+                Number(audit.observedRatio) ||
+                null,
+
+            confidence:
+                Number(audit.confidence) ||
+                0,
+
+            status:
+                audit.status || null
+        });
+
+
+        store[itemId] =
+            this.pruneAuditHistory(
+                store[itemId]
+            );
+
+
+        await this.write(
+            this.auditHistoryKey,
+            store
+        );
+    }
+
+
+    async getAuditHistory(itemId) {
+
+        const numericId =
+            Number(itemId);
+
+
+        if (
+            !Number.isInteger(numericId) ||
+            numericId <= 0
+        ) {
+
+            return [];
+        }
+
+
+        const store =
+            await this.read(
+                this.auditHistoryKey,
+                {}
+            );
+
+
+        return Array.isArray(
+            store[numericId]
+        )
+            ? store[numericId]
+            : [];
+    }
+
+
+    /*
+     * =========================================================
+     * PRECIO INTERNO (InternalPriceList)
+     * =========================================================
+     *
+     * Persistencia del "learning" del sistema: el valor de
+     * referencia interno que InternalPriceList.get()/save()/
+     * initialize()/update() leen y escriben.
+     */
+
+    async saveInternalPrice(priceData) {
+
+        const itemId =
+            Number(priceData?.itemId);
+
+
+        if (
+            !Number.isInteger(itemId) ||
+            itemId <= 0
+        ) {
+
+            throw new Error(
+                "No se puede guardar el precio interno sin itemId válido."
+            );
+        }
+
+
+        const prices =
+            await this.read(
+                this.internalPriceKey,
+                {}
+            );
+
+
+        prices[itemId] =
+            priceData;
+
+
+        await this.write(
+            this.internalPriceKey,
+            prices
+        );
+
+
+        return priceData;
+    }
+
+
+    async getInternalPrice(itemId) {
+
+        const numericId =
+            Number(itemId);
+
+
+        if (
+            !Number.isInteger(numericId) ||
+            numericId <= 0
+        ) {
+
+            return null;
+        }
+
+
+        const prices =
+            await this.read(
+                this.internalPriceKey,
+                {}
+            );
+
+
+        return (
+            prices[numericId] ||
+            null
+        );
+    }
+
+
+    pruneAuditHistory(entries) {
+
+        if (
+            !Array.isArray(entries)
+        ) {
+
+            return [];
+        }
+
+
+        const cutoff =
+            Date.now() -
+            CONFIG.AUDIT_HISTORY_HOURS *
+            60 *
+            60 *
+            1000;
+
+
+        return entries.filter(
+            entry =>
+                Number(
+                    entry?.timestamp
+                ) >= cutoff
+        );
     }
 
 
@@ -532,5 +779,114 @@ export class Storage {
                     snapshot?.timestamp
                 ) >= cutoff
         );
+    }
+    /*
+     * =========================================================
+     * RESET TOTAL DEL SISTEMA
+     * =========================================================
+     *
+     * Borra TODO lo persistido por TornW3B: configuración
+     * (credenciales), pricelist cacheada, auditorías, historial
+     * agregado, historial crudo intradía y precios internos
+     * aprendidos.
+     *
+     * Motivo: auditorías o precios internos generados por
+     * versiones anteriores con bugs (ej. Market Value mal
+     * calculado) pueden quedar "ancladas" — en particular
+     * InternalPriceList solo fija su valor inicial UNA VEZ por
+     * artículo (ver internalPriceList.js → initialize()), y
+     * el ratio aprendido (EWMA) se arrastra desde la auditoría
+     * anterior (ver ratioLearner.js → update()). Sin un reset,
+     * esos datos corruptos pueden seguir influyendo en cálculos
+     * futuros aunque el bug ya esté corregido.
+     *
+     * También limpia la lista de "artículos inválidos" del
+     * Scheduler, que vive en su propia clave de localStorage
+     * fuera de esta clase (ver scheduler.js →
+     * INVALID_ITEMS_STORAGE_KEY).
+     */
+
+    async resetAll() {
+
+        const keys = [
+
+            this.configKey,
+
+            this.pricelistKey,
+
+            this.auditKey,
+
+            this.historyKey,
+
+            this.auditHistoryKey,
+
+            this.internalPriceKey
+        ];
+
+
+        for (const key of keys) {
+
+            try {
+
+                if (this.engine === "gm") {
+
+                    if (
+                        typeof GM_deleteValue === "function"
+                    ) {
+
+                        await Promise.resolve(
+                            GM_deleteValue(key)
+                        );
+
+                    } else {
+
+                        /*
+                         * Fallback si el gestor de userscripts
+                         * no expone GM_deleteValue: sobrescribir
+                         * con un valor vacío es suficiente para
+                         * que read() devuelva el fallback.
+                         */
+
+                        await Promise.resolve(
+                            GM_setValue(key, "")
+                        );
+                    }
+
+                } else {
+
+                    localStorage.removeItem(key);
+                }
+
+            } catch (error) {
+
+                console.warn(
+                    `[Storage] Error borrando ${key}:`,
+                    error
+                );
+            }
+        }
+
+
+        /*
+         * Lista de artículos inválidos del Scheduler
+         * (clave independiente, siempre en localStorage).
+         */
+
+        try {
+
+            localStorage.removeItem(
+                "tornw3b-invalid-items"
+            );
+
+        } catch (error) {
+
+            console.warn(
+                "[Storage] Error borrando lista de artículos inválidos:",
+                error
+            );
+        }
+
+
+        return true;
     }
 }

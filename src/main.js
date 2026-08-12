@@ -1,3 +1,30 @@
+/*
+ * =============================================================
+ * MAIN.JS
+ * =============================================================
+ *
+ * Punto de entrada del userscript TornW3B.
+ *
+ * Responsabilidades:
+ *
+ *   1. Instanciar TODAS las dependencias de negocio, respetando
+ *      el orden correcto (algunas dependen de otras).
+ *   2. Inicializar Scheduler + History (reconstruir caché en
+ *      memoria a partir de lo ya guardado en Storage).
+ *   3. Arrancar el ciclo pasivo de auditoría SOLO si ya existen
+ *      credenciales guardadas. Si es la primera vez que se usa
+ *      el script (sin credenciales), es settingsView quien
+ *      dispara scheduler.start() la primera vez que se guardan
+ *      credenciales correctamente (ver handleCredentialsSaved
+ *      en app.js).
+ *   4. Montar la interfaz (FAB + panel) llamando a createApp().
+ *
+ * NOTA: el FAB se monta directamente en document.body (ver
+ * app.js → document.body.appendChild(fab)). Esto asume que
+ * TornPDA renderiza el contenido en el DOM principal, sin
+ * Shadow DOM ni iframe aislado.
+ * =============================================================
+ */
 
 import { CONFIG } from "./config.js";
 
@@ -6,230 +33,119 @@ import { W3BAPI } from "./api/w3b.js";
 
 import { Storage } from "./data/storage.js";
 import { Pricelist } from "./data/pricelist.js";
+import { InternalPriceList } from "./data/internalPriceList.js";
+import { PriceProposal } from "./data/priceProposal.js";
+import { PriceUpdateService } from "./data/priceUpdateService.js";
 
-import { MarketAnalyzer } from "./market/marketAnalyzer.js";
+import { History } from "./history/history.js";
+import { AuditHistory } from "./auditor/auditHistory.js";
 import { RatioLearner } from "./auditor/ratioLearner.js";
 import { Auditor } from "./auditor/auditor.js";
 import { Scheduler } from "./auditor/scheduler.js";
 
-import { History } from "./history/history.js";
+import { MarketAnalyzer } from "./market/marketAnalyzer.js";
+import { BazaarAnalyzer } from "./market/bazaarAnalyzer.js";
+import { MarketValueAnalyzer } from "./market/marketValueAnalyzer.js";
 
-import { App } from "./ui/app.js";
-import { search } from "./ui/search.js";
-import { saleView } from "./ui/saleView.js";
-import { auditView } from "./ui/auditView.js";
-import { historyView } from "./ui/historyView.js";
-import { settingsView } from "./ui/settingsView.js";
+import { createApp } from "./ui/app.js";
 
 
-/*
- * =========================================================
- * PROTECCIÓN CONTRA DOBLE INICIALIZACIÓN
- * =========================================================
+/* =============================================================
+ * EVITAR DOBLE INICIALIZACIÓN
+ * =============================================================
  *
- * TornW3B puede ser inyectado más de una vez
- * por TornPDA / navegador / recarga parcial.
- *
- * Si ya existe una inicialización en progreso,
- * reutilizamos esa Promise.
+ * Algunos gestores de userscripts pueden inyectar el script
+ * más de una vez (recarga de SPA dentro de TornPDA, re-inyección
+ * al navegar, etc.). Sin esta guarda tendríamos dos FABs, dos
+ * Schedulers corriendo en paralelo, etc.
  */
 
-const GLOBAL_START_KEY =
-    "__TORNW3B_START_PROMISE__";
+if (window.__TW3B_BOOTED__) {
 
-
-/*
- * Si ya existe una instancia completamente
- * inicializada, no crear otra.
- */
-
-if (
-    window.TornW3B &&
-    window.TornW3B.__initialized
-) {
-
-    console.log(
-        "[TornW3B] Ya existe una instancia activa. " +
-        "Se evita una segunda inicialización."
-    );
-
-} else if (
-    window[GLOBAL_START_KEY]
-) {
-
-    console.log(
-        "[TornW3B] Inicialización ya en progreso."
+    console.warn(
+        "[TornW3B] main.js ya fue ejecutado en esta página. " +
+        "Se ignora esta segunda ejecución."
     );
 
 } else {
 
-    window[GLOBAL_START_KEY] =
-        start();
+    window.__TW3B_BOOTED__ =
+        true;
 
-    window[GLOBAL_START_KEY]
-        .catch(
-            error => {
+    boot().catch((error) => {
 
-                console.error(
-                    "[TornW3B] Error fatal al iniciar:",
-                    error
-                );
-
-            }
-        )
-        .finally(
-            () => {
-
-                /*
-                 * La Promise se conserva si la aplicación
-                 * quedó correctamente inicializada.
-                 *
-                 * Si hubo un error antes de completar
-                 * la inicialización, permitimos reintentar.
-                 */
-
-                if (
-                    !window.TornW3B ||
-                    !window.TornW3B.__initialized
-                ) {
-
-                    delete window[
-                        GLOBAL_START_KEY
-                    ];
-                }
-            }
+        console.error(
+            "[TornW3B] Error fatal iniciando la aplicación:",
+            error
         );
+    });
 }
 
 
-/*
- * =========================================================
- * START
- * =========================================================
- */
+/* =============================================================
+ * BOOTSTRAP
+ * ============================================================= */
 
-async function start() {
+async function boot() {
 
-    /*
-     * =====================================================
-     * DOBLE COMPROBACIÓN
-     * =====================================================
-     */
-
-    if (
-        window.TornW3B &&
-        window.TornW3B.__initialized
-    ) {
-
-        console.log(
-            "[TornW3B] La aplicación ya está inicializada."
-        );
-
-        return window.TornW3B;
-    }
+    await waitForBody();
 
 
-    /*
-     * =====================================================
-     * LIMPIAR INSTANCIA ANTERIOR
+    /* =====================================================
+     * 1. STORAGE + CONFIGURACIÓN GUARDADA
      * =====================================================
      *
-     * Si existe una App vieja pero no quedó marcada
-     * como completamente inicializada, la destruimos.
-     */
-
-    cleanupPreviousApp();
-
-
-    /*
-     * =====================================================
-     * STORAGE + CONFIG
-     * =====================================================
+     * Storage no depende de nada. Se instancia primero
+     * porque todo lo demás la necesita, directa o
+     * indirectamente.
      */
 
     const storage =
         new Storage();
 
 
-    const config =
+    const savedConfig =
         await storage.getConfig();
 
 
-    /*
+    const tornApiKey =
+        savedConfig?.tornApiKey ||
+        null;
+
+    const w3bApiKey =
+        savedConfig?.w3bApiKey ||
+        null;
+
+    const w3bUserId =
+        savedConfig?.w3bUserId ||
+        null;
+
+
+    /* =====================================================
+     * 2. APIS
      * =====================================================
-     * APP
-     * =====================================================
-     */
-
-    const app =
-        buildApp(
-            storage,
-            config
-        );
-
-
-    /*
-     * Montar solamente una vez.
-     */
-
-    app.mount();
-
-
-    /*
-     * =====================================================
-     * CREDENCIALES
-     * =====================================================
-     */
-
-    if (
-        !config.tornApiKey ||
-        !config.w3bUserId
-    ) {
-
-        console.warn(
-            "[TornW3B] Faltan credenciales — " +
-            "abrí Configuración desde el menú para ingresarlas."
-        );
-
-
-        /*
-         * Guardamos la instancia aunque
-         * todavía no esté completamente inicializada.
-         */
-
-        window.TornW3B = {
-
-            app,
-
-            storage,
-
-            config,
-
-            __initialized: true
-        };
-
-
-        return window.TornW3B;
-    }
-
-
-    /*
-     * =====================================================
-     * DEPENDENCIAS
-     * =====================================================
+     *
+     * Se instancian aunque no haya credenciales todavía:
+     * settingsView.js muta `apiKey` directamente sobre estas
+     * mismas instancias en cuanto el usuario las guarda, sin
+     * necesidad de reinstanciar nada (ver punto 2 en
+     * settingsView.js).
      */
 
     const tornAPI =
         new TornAPI(
-            config.tornApiKey
+            tornApiKey
         );
-
 
     const w3bAPI =
         new W3BAPI(
-            config.w3bApiKey
+            w3bApiKey
         );
 
+
+    /* =====================================================
+     * 3. CAPA DE DATOS
+     * ===================================================== */
 
     const pricelist =
         new Pricelist({
@@ -237,25 +153,23 @@ async function start() {
             storage
         });
 
-
-    const marketAnalyzer =
-        new MarketAnalyzer(
-            CONFIG.SAMPLE_PERCENTAGE
+    const internalPriceList =
+        new InternalPriceList(
+            storage
         );
 
+    const priceProposal =
+        new PriceProposal();
 
-    const ratioLearner =
-        new RatioLearner();
-
-
-    const auditor =
-        new Auditor({
-            tornAPI,
-            marketAnalyzer,
-            ratioLearner,
-            storage
+    const priceUpdateService =
+        new PriceUpdateService({
+            internalPriceList
         });
 
+
+    /* =====================================================
+     * 4. HISTORIAL
+     * ===================================================== */
 
     const history =
         new History({
@@ -263,12 +177,63 @@ async function start() {
             storage
         });
 
+    const auditHistory =
+        new AuditHistory(
+            storage
+        );
 
-    /*
-     * =====================================================
-     * SCHEDULER
-     * =====================================================
-     */
+
+    /* =====================================================
+     * 5. ANÁLISIS DE MERCADO
+     * ===================================================== */
+
+    const marketAnalyzer =
+        new MarketAnalyzer(
+            CONFIG.SAMPLE_PERCENTAGE
+        );
+
+    const bazaarAnalyzer =
+        new BazaarAnalyzer();
+
+    const marketValueAnalyzer =
+        new MarketValueAnalyzer();
+
+
+    /* =====================================================
+     * 6. AUDITOR
+     * ===================================================== */
+
+    const ratioLearner =
+        new RatioLearner();
+
+    const auditor =
+        new Auditor({
+
+            tornAPI,
+
+            w3bAPI,
+
+            marketAnalyzer,
+
+            bazaarAnalyzer,
+
+            marketValueAnalyzer,
+
+            ratioLearner,
+
+            storage,
+
+            priceProposal,
+
+            internalPriceList,
+
+            w3bUserId
+        });
+
+
+    /* =====================================================
+     * 7. SCHEDULER
+     * ===================================================== */
 
     const scheduler =
         new Scheduler({
@@ -281,366 +246,136 @@ async function start() {
 
             history,
 
-            /*
-             * Mantener 1 para evitar
-             * sobrecargar las APIs.
-             */
-            concurrency: 1
+            auditHistory
         });
 
 
-    console.log(
-        "[TornW3B] Dependencias inicializadas"
-    );
-
-
-    /*
+    /* =====================================================
+     * 8. INICIALIZAR CACHÉS EN MEMORIA
      * =====================================================
-     * SINCRONIZAR PRICELIST
-     * =====================================================
+     *
+     * Reconstruyen sus mapas internos (lastAuditByItem,
+     * invalidItems, lastDayByItem) a partir de lo que ya
+     * existe en Storage. No dispara ninguna petición HTTP.
      */
 
-    try {
+    await Promise.all([
 
-        const pricelistItems =
-            await pricelist.sync(
-                config.w3bUserId
-            );
+        scheduler.init(),
 
+        history.init()
+    ]);
+
+
+    /* =====================================================
+     * 9. ARRANCAR CICLO PASIVO (SOLO SI YA HAY CREDENCIALES)
+     * =====================================================
+     *
+     * Si el usuario todavía no configuró Torn API Key +
+     * W3B User ID, NO arrancamos el ciclo pasivo: la
+     * Pricelist local estará vacía y solo generaría ruido
+     * (o errores) en consola.
+     *
+     * settingsView.js llama a scheduler.start() la primera
+     * vez que se guardan credenciales correctamente, vía el
+     * callback onCredentialsSaved → handleCredentialsSaved
+     * en app.js (que ya comprueba `!deps.scheduler.started`
+     * antes de arrancar).
+     */
+
+    const hasCredentials =
+        Boolean(tornApiKey) &&
+        Boolean(w3bUserId);
+
+    if (hasCredentials) {
+
+        scheduler.start();
+
+    } else {
 
         console.log(
-            `[TornW3B] Pricelist sincronizada: ` +
-            `${pricelistItems.items.length} items`
-        );
-
-    } catch (error) {
-
-        console.error(
-            "[TornW3B] Error sincronizando pricelist:",
-            error
-        );
-
-
-        console.warn(
-            "[TornW3B] Se utilizará la pricelist cacheada " +
-            "(si existe)."
+            "[TornW3B] Sin credenciales guardadas todavía. " +
+            "El ciclo pasivo se iniciará al guardar la " +
+            "configuración por primera vez."
         );
     }
 
 
-    /*
-     * =====================================================
-     * HISTORY
-     * =====================================================
-     */
+    /* =====================================================
+     * 10. MONTAR INTERFAZ
+     * ===================================================== */
 
-    await history.init();
+    const app =
+        createApp({
 
+            pricelist,
 
-    /*
-     * =====================================================
-     * SCHEDULER INIT
-     * =====================================================
-     */
+            storage,
 
-    await scheduler.init();
+            scheduler,
 
+            history,
 
-    /*
-     * =====================================================
-     * CALLBACKS
-     * =====================================================
-     */
-
-    scheduler.onAuditComplete =
-        result => {
-
-            console.log(
-                `[TornW3B] Auditoría completa: ` +
-                `${result.itemName} → ${result.status}`
-            );
-
-
-            /*
-             * Actualizar badge.
-             */
-
-            app.refreshAlertBadge();
-        };
-
-
-    scheduler.onAuditError =
-        (item, error) => {
-
-            console.error(
-                `[TornW3B] Error auditando ${item.name}:`,
-                error
-            );
-        };
-
-
-    /*
-     * =====================================================
-     * INYECTAR DEPENDENCIAS
-     * =====================================================
-     */
-
-    Object.assign(
-        app.ctx,
-        {
+            auditHistory,
 
             tornAPI,
 
             w3bAPI,
 
-            pricelist,
-
-            marketAnalyzer,
-
-            ratioLearner,
-
-            auditor,
-
-            history,
-
-            scheduler
-        }
-    );
+            priceUpdateService
+        });
 
 
     /*
-     * =====================================================
-     * INICIAR SCHEDULER
-     * =====================================================
-     *
-     * El Scheduler se encarga de:
-     *
-     * - ciclo pasivo horario
-     * - completar todos los artículos
-     * - prioridad de búsquedas
-     * - continuar la pasiva después
-     *   de una auditoría prioritaria
-     * - evitar duplicados
+     * Referencia global de depuración. Ninguna vista depende
+     * de esto: solo ayuda a inspeccionar el estado desde la
+     * consola del navegador dentro de TornPDA.
      */
 
-    scheduler.start();
-
-
-    /*
-     * =====================================================
-     * BADGE INICIAL
-     * =====================================================
-     */
-
-    await app.refreshAlertBadge();
-
-
-    /*
-     * =====================================================
-     * API GLOBAL
-     * =====================================================
-     *
-     * IMPORTANTE:
-     * Marcamos la instancia como inicializada.
-     */
-
-    const instance = {
-
-        tornAPI,
-
-        w3bAPI,
-
-        storage,
-
-        config,
-
-        pricelist,
-
-        marketAnalyzer,
-
-        ratioLearner,
-
-        auditor,
-
-        history,
-
-        scheduler,
+    window.__TW3B__ = {
 
         app,
 
-        __initialized: true
+        storage,
+
+        scheduler,
+
+        history,
+
+        pricelist
     };
-
-
-    window.TornW3B =
-        instance;
 
 
     console.log(
-        "[TornW3B] Sistema iniciado correctamente"
-    );
-
-
-    return instance;
-}
-
-
-/*
- * =========================================================
- * BUILD APP
- * =========================================================
- */
-
-function buildApp(
-    storage,
-    config
-) {
-
-    const ctx = {
-
-        storage,
-
-        config
-    };
-
-
-    /*
-     * Cada módulo mantiene su propia vista.
-     */
-
-    const views = {
-
-        search,
-
-        sale: saleView,
-
-        audit: auditView,
-
-        history: historyView,
-
-        settings: settingsView
-    };
-
-
-    return new App(
-        ctx,
-        views
+        "[TornW3B] Aplicación iniciada correctamente."
     );
 }
 
 
-/*
- * =========================================================
- * CLEANUP PREVIOUS APP
- * =========================================================
+/* =============================================================
+ * ESPERAR document.body
+ * =============================================================
  *
- * Elimina una instancia anterior del DOM.
- *
- * Esto es especialmente importante en TornPDA,
- * donde el script puede volver a ejecutarse sin
- * que la página completa se recargue.
- * =========================================================
+ * El FAB se monta directamente en document.body (app.js). Si
+ * el userscript corre con @run-at document-start, body todavía
+ * puede no existir en ese momento.
  */
 
-function cleanupPreviousApp() {
+function waitForBody() {
 
-    /*
-     * Si existe una instancia anterior,
-     * intentamos detener su Scheduler.
-     */
+    return new Promise((resolve) => {
 
-    const previous =
-        window.TornW3B;
+        if (document.body) {
 
+            resolve();
 
-    if (
-        previous
-    ) {
-
-        try {
-
-            if (
-                previous.scheduler &&
-                typeof previous.scheduler.stop ===
-                "function"
-            ) {
-
-                previous.scheduler.stop();
-            }
-
-        } catch (error) {
-
-            console.warn(
-                "[TornW3B] Error deteniendo Scheduler anterior:",
-                error
-            );
+            return;
         }
 
-
-        /*
-         * Si la App dispone de destroy(),
-         * utilizarlo.
-         */
-
-        try {
-
-            if (
-                previous.app &&
-                typeof previous.app.destroy ===
-                "function"
-            ) {
-
-                previous.app.destroy();
-            }
-
-        } catch (error) {
-
-            console.warn(
-                "[TornW3B] Error destruyendo App anterior:",
-                error
-            );
-        }
-    }
-
-
-    /*
-     * =====================================================
-     * ELIMINAR FAB/PANEL RESIDUALES
-     * =====================================================
-     *
-     * Usamos selectores específicos para no tocar
-     * elementos pertenecientes a TornPDA.
-     */
-
-    document
-        .querySelectorAll(
-            ".tw3b-fab"
-        )
-        .forEach(
-            element => {
-
-                element.remove();
-
-            }
+        document.addEventListener(
+            "DOMContentLoaded",
+            () => resolve(),
+            { once: true }
         );
-
-
-    document
-        .querySelectorAll(
-            ".tw3b-panel"
-        )
-        .forEach(
-            element => {
-
-                element.remove();
-
-            }
-        );
-
-
-    /*
-     * Limpiar referencia global.
-     */
-
-    delete window.TornW3B;
+    });
 }

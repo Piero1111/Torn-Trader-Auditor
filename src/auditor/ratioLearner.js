@@ -82,15 +82,27 @@ export class RatioLearner {
          * Conservamos el aprendizaje anterior.
          */
 
+        /*
+        * Observación inválida.
+        *
+        * Conservamos el aprendizaje anterior únicamente
+        * si el ratio anterior también es válido.
+        */
+
         if (
             !Number.isFinite(observed) ||
             observed <= 0
         ) {
 
-            return Number.isFinite(previous)
+            return (
+                Number.isFinite(previous) &&
+                previous > 0
+            )
                 ? previous
                 : null;
         }
+
+
 
 
         /*
@@ -178,5 +190,82 @@ export class RatioLearner {
 
 
         return value * ratio;
+    }
+    /*
+     * =========================================================
+     * SELL RATIO
+     * =========================================================
+     *
+     * El margen de venta es la mitad del margen de compra.
+     *
+     * Ejemplo:
+     *
+     * Buy Ratio  = 0.80  (comprando 20% por debajo del Item Value)
+     * Sell Ratio = 0.90  (vendiendo 10% por debajo del Item Value)
+     *
+     *     sellRatio = (1 + buyRatio) / 2
+     */
+
+    calculateSellRatio(buyRatio) {
+
+        const ratio =
+            Number(buyRatio);
+
+
+        if (
+            !Number.isFinite(ratio) ||
+            ratio <= 0
+        ) {
+
+            return null;
+        }
+
+
+        return (1 + ratio) / 2;
+    }
+
+
+    /*
+     * =========================================================
+     * RECOMMENDED SELL PRICE
+     * =========================================================
+     *
+     * Convierte el Sell Ratio nuevamente en un precio
+     * de venta, sobre el Item Value de Torn.
+     *
+     * Ejemplo:
+     *
+     * Item Value = 1000
+     * Buy Ratio  = 0.80
+     *
+     * Sell Ratio = 0.90
+     * Sell Price = 900
+     */
+
+    calculateRecommendedSellPrice(
+        itemValue,
+        buyRatio
+    ) {
+
+        const value =
+            Number(itemValue);
+
+        const sellRatio =
+            this.calculateSellRatio(
+                buyRatio
+            );
+
+
+        if (
+            !Number.isFinite(value) ||
+            value <= 0 ||
+            !Number.isFinite(sellRatio)
+        ) {
+
+            return null;
+        }
+
+
+        return value * sellRatio;
     }
 }
