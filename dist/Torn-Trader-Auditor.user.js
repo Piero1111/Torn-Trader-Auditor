@@ -35,6 +35,7 @@
 			this.minRequestInterval = 1e3;
 			this.lastRequestTime = 0;
 			this.maxRetries = 4;
+			this.maxPDARetries = 3;
 		}
 		sleep(ms) {
 			return new Promise((resolve) => setTimeout(resolve, ms));
@@ -69,27 +70,53 @@
 				throw lastError || /* @__PURE__ */ new Error("Torn API error");
 			});
 		}
-		performRequest(path) {
+		async performRequest(path) {
 			const separator = path.includes("?") ? "&" : "?";
 			const url = `${CONFIG.TORN_API_BASE}${path}${separator}key=` + encodeURIComponent(this.apiKey);
-			console.log("[TornAPI] REQUEST:", path);
-			if (typeof PDA_httpGet === "function") return PDA_httpGet(url).then((response) => {
-				if (!response) {
-					console.warn("[TornAPI] PDA respuesta vacía:", path);
-					throw new Error("PDA devolvió una respuesta vacía");
+			if (typeof PDA_httpGet === "function") return this.performPDARequest(path, url);
+			return this.performGMRequest(path, url);
+		}
+		async performPDARequest(path, url) {
+			let lastError = null;
+			for (let attempt = 0; attempt < this.maxPDARetries; attempt++) try {
+				const response = await PDA_httpGet(url);
+				if (response == null) {
+					console.warn("[TornAPI] PDA respuesta vacía:", path, "intento:", attempt + 1);
+					await this.sleep(300);
+					continue;
 				}
-				console.log("[TornAPI] PDA:", path, "STATUS:", response.status);
+				console.log("[TornAPI] PDA:", path, "STATUS:", response?.status);
+				console.log("[TornAPI] PDA RESPONSE KEYS:", path, Object.keys(response));
+				const responseText = response?.responseText;
+				console.log("[TornAPI] PDA RESPONSE TEXT TYPE:", path, typeof responseText);
+				if (responseText == null || responseText === "") {
+					console.warn("[TornAPI] PDA responseText vacío:", path, "STATUS:", response?.status);
+					await this.sleep(300);
+					continue;
+				}
 				let data;
 				try {
-					if (typeof response.responseText === "string") data = JSON.parse(response.responseText);
-					else if (response.responseText && typeof response.responseText === "object") data = response.responseText;
-					else throw new Error("responseText vacío o inexistente");
+					if (typeof responseText === "string") data = JSON.parse(responseText);
+					else if (typeof responseText === "object") data = responseText;
+					else throw new Error("Tipo de responseText no soportado");
 				} catch (error) {
-					console.error("[TornAPI] PDA JSON ERROR:", path, error, response);
+					console.error("[TornAPI] ERROR JSON PDA:", path, error);
 					throw new Error("Respuesta inválida de Torn API");
 				}
-				return this.processResponse(data, response.status);
-			});
+				return this.processResponse(data, response?.status);
+			} catch (error) {
+				lastError = error;
+				if (error?.code === "RATE_LIMIT") throw error;
+				if (error?.message === "PDA_EMPTY_RESPONSE") {
+					await this.sleep(300);
+					continue;
+				}
+				throw error;
+			}
+			console.error("[TornAPI] PDA agotó reintentos:", path, lastError);
+			throw lastError || /* @__PURE__ */ new Error("PDA no devolvió ninguna respuesta");
+		}
+		performGMRequest(path, url) {
 			return new Promise((resolve, reject) => {
 				GM_xmlhttpRequest({
 					method: "GET",
@@ -101,7 +128,6 @@
 						try {
 							data = JSON.parse(response.responseText);
 						} catch (error) {
-							console.error("[TornAPI] GM JSON ERROR:", path, error, response);
 							reject(/* @__PURE__ */ new Error("Respuesta inválida de Torn API"));
 							return;
 						}
@@ -116,7 +142,6 @@
 						reject(/* @__PURE__ */ new Error(`No se pudo conectar con Torn API: ${path}`));
 					},
 					ontimeout: () => {
-						console.error("[TornAPI] GM TIMEOUT:", path);
 						reject(/* @__PURE__ */ new Error("Timeout conectando con Torn API"));
 					}
 				});
@@ -128,7 +153,8 @@
 				error.code = "RATE_LIMIT";
 				throw error;
 			}
-			if (typeof status === "number" && (status < 200 || status >= 300)) throw new Error(`Torn API HTTP ${status}`);
+			if (status == null) throw new Error("Respuesta inválida de Torn API");
+			if (status < 200 || status >= 300) throw new Error(`Torn API HTTP ${status}`);
 			if (data?.error) {
 				const error = new Error(data.error.error || "Torn API error");
 				if (data.error.error === "Incorrect ID") error.code = "INVALID_ID";
@@ -4589,6 +4615,7 @@
 	}
 	//#endregion
 })();
+
 
 
 
