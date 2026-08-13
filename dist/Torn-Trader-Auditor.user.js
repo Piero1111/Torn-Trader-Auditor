@@ -81,50 +81,59 @@
 		performRequest(path) {
 			const separator = path.includes("?") ? "&" : "?";
 			const url = `${CONFIG.TORN_API_BASE}${path}${separator}key=` + encodeURIComponent(this.apiKey);
-			console.log("[TornAPI] REQUEST:", path);
+			if (typeof PDA_httpGet === "function") return PDA_httpGet(url).then((response) => {
+				console.log("[TornAPI] PDA:", path, "STATUS:", response?.status);
+				let data;
+				try {
+					data = JSON.parse(response.responseText);
+				} catch {
+					throw new Error("Respuesta inválida de Torn API");
+				}
+				return this.processResponse(data, response.status);
+			});
 			return new Promise((resolve, reject) => {
 				GM_xmlhttpRequest({
 					method: "GET",
 					url,
 					timeout: 3e4,
 					onload: (response) => {
-						console.log("[TornAPI] ONLOAD:", path, "STATUS:", response.status);
-						let data = null;
+						console.log("[TornAPI] GM:", path, "STATUS:", response?.status);
+						let data;
 						try {
 							data = JSON.parse(response.responseText);
+						} catch {
+							reject(/* @__PURE__ */ new Error("Respuesta inválida de Torn API"));
+							return;
+						}
+						try {
+							resolve(this.processResponse(data, response.status));
 						} catch (error) {
-							console.error("[TornAPI] JSON parse error:", error);
-							reject(/* @__PURE__ */ new Error(`Respuesta inválida de Torn API | HTTP ${response.status} | Body: ${response.responseText?.slice(0, 200)}`));
-							return;
-						}
-						if (data?.error?.error === "Too many requests") {
-							const error = /* @__PURE__ */ new Error("Too many requests");
-							error.code = "RATE_LIMIT";
 							reject(error);
-							return;
 						}
-						if (response.status < 200 || response.status >= 300) {
-							reject(/* @__PURE__ */ new Error(`Torn API HTTP ${response.status}`));
-							return;
-						}
-						if (data?.error) {
-							const error = new Error(data.error.error || "Torn API error");
-							if (data.error.error === "Incorrect ID") error.code = "INVALID_ID";
-							reject(error);
-							return;
-						}
-						resolve(data);
 					},
 					onerror: (error) => {
-						console.error("[TornAPI] ONERROR:", path, error);
+						console.error("[TornAPI] GM ONERROR:", path, error);
 						reject(/* @__PURE__ */ new Error(`No se pudo conectar con Torn API: ${path}`));
 					},
 					ontimeout: () => {
-						console.error("[TornAPI] TIMEOUT:", path);
-						reject(/* @__PURE__ */ new Error(`Timeout conectando con Torn API: ${path}`));
+						reject(/* @__PURE__ */ new Error("Timeout conectando con Torn API"));
 					}
 				});
 			});
+		}
+		processResponse(data, status) {
+			if (data?.error?.error === "Too many requests") {
+				const error = /* @__PURE__ */ new Error("Too many requests");
+				error.code = "RATE_LIMIT";
+				throw error;
+			}
+			if (status < 200 || status >= 300) throw new Error(`Torn API HTTP ${status}`);
+			if (data?.error) {
+				const error = new Error(data.error.error || "Torn API error");
+				if (data.error.error === "Incorrect ID") error.code = "INVALID_ID";
+				throw error;
+			}
+			return data;
 		}
 		async getItem(itemId) {
 			return this.request(`/torn/${itemId}/items`);
@@ -4579,6 +4588,7 @@
 	}
 	//#endregion
 })();
+
 
 
 
