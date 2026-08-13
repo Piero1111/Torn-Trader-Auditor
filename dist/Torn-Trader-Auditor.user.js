@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn Trader Auditor
 // @namespace    ShinNamo
-// @version      1.1.1
+// @version      1.0.0
 // @description  Auditor y analizador de precios para Torn
 // @author       ShinNamo
 // @match        https://www.torn.com/*
@@ -70,17 +70,17 @@
 			});
 		}
 		performRequest(path) {
-			const separator = path.includes("?") ? "&" : "?";
-			const url = `${CONFIG.TORN_API_BASE}${path}${separator}key=` + encodeURIComponent(this.apiKey);
+			path.includes("?");
+			const url = "${CONFIG.TORN_API_BASE}${path}${separator}key=" + encodeURIComponent(this.apiKey);
+			console.log("[TornAPI] REQUEST:", path);
 			return new Promise((resolve, reject) => {
 				GM_xmlhttpRequest({
 					method: "GET",
 					url,
 					timeout: 3e4,
 					onload: (response) => {
-						console.log("[TornAPI] Status:", response.status);
-						console.log("[TornAPI] Headers:", response.responseHeaders);
-						console.log("[TornAPI] Body:", response.responseText);
+						console.log("[TornAPI] ONLOAD:", path, "STATUS:", response.status);
+						console.log("[TornAPI] BODY:", response.responseText);
 						let data = null;
 						try {
 							data = JSON.parse(response.responseText);
@@ -107,11 +107,13 @@
 						}
 						resolve(data);
 					},
-					onerror: () => {
-						reject(/* @__PURE__ */ new Error("No se pudo conectar con Torn API"));
+					onerror: (error) => {
+						console.error("[TornAPI] ONERROR:", path, error);
+						reject(/* @__PURE__ */ new Error("No se pudo conectar con Torn API: ${path}"));
 					},
 					ontimeout: () => {
-						reject(/* @__PURE__ */ new Error("Timeout conectando con Torn API"));
+						console.error("[TornAPI] TIMEOUT:", path);
+						reject(/* @__PURE__ */ new Error("Timeout conectando con Torn API: ${path}"));
 					}
 				});
 			});
@@ -4569,4 +4571,5 @@
 	}
 	//#endregion
 })();
+
 
