@@ -31,6 +31,11 @@
 	var TornAPI = class {
 		constructor(apiKey) {
 			console.log("[TornPDA] PDA_httpGet:", typeof PDA_httpGet);
+			if (typeof PDA_httpGet === "function") PDA_httpGet("https://api.torn.com/v2/torn/12/items?key=" + encodeURIComponent(apiKey)).then((response) => {
+				console.log("[TornPDA TEST] PDA_httpGet response:", response);
+			}).catch((error) => {
+				console.error("[TornPDA TEST] PDA_httpGet error:", error);
+			});
 			this.apiKey = apiKey;
 			this.requestQueue = Promise.resolve();
 			this.minRequestInterval = 1e3;
@@ -81,7 +86,6 @@
 					timeout: 3e4,
 					onload: (response) => {
 						console.log("[TornAPI] ONLOAD:", path, "STATUS:", response.status);
-						console.log("[TornAPI] BODY:", response.responseText);
 						let data = null;
 						try {
 							data = JSON.parse(response.responseText);
@@ -4572,6 +4576,7 @@
 	}
 	//#endregion
 })();
+
 
 
 
