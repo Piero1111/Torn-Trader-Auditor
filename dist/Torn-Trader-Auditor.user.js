@@ -74,20 +74,18 @@
 			const url = `${CONFIG.TORN_API_BASE}${path}${separator}key=` + encodeURIComponent(this.apiKey);
 			console.log("[TornAPI] REQUEST:", path);
 			if (typeof PDA_httpGet === "function") return PDA_httpGet(url).then((response) => {
-				console.log("[TornAPI] PDA RAW RESPONSE:", path, response);
-				console.log("[TornAPI] PDA RESPONSE KEYS:", path, response ? Object.keys(response) : null);
-				console.log("[TornAPI] PDA STATUS:", path, response?.status);
-				console.log("[TornAPI] PDA RESPONSE TEXT TYPE:", path, typeof response?.responseText);
-				if (!response) throw new Error("PDA no devolvió ninguna respuesta");
-				let data = response.responseText;
-				if (typeof data === "string") try {
-					data = JSON.parse(data);
-				} catch (error) {
-					console.error("[TornAPI] PDA JSON ERROR:", path, error, data);
-					throw new Error("Respuesta inválida de Torn API");
+				if (!response) {
+					console.warn("[TornAPI] PDA respuesta vacía:", path);
+					throw new Error("PDA devolvió una respuesta vacía");
 				}
-				else if (data && typeof data === "object") {} else {
-					console.error("[TornAPI] PDA BODY INVÁLIDO:", path, data);
+				console.log("[TornAPI] PDA:", path, "STATUS:", response.status);
+				let data;
+				try {
+					if (typeof response.responseText === "string") data = JSON.parse(response.responseText);
+					else if (response.responseText && typeof response.responseText === "object") data = response.responseText;
+					else throw new Error("responseText vacío o inexistente");
+				} catch (error) {
+					console.error("[TornAPI] PDA JSON ERROR:", path, error, response);
 					throw new Error("Respuesta inválida de Torn API");
 				}
 				return this.processResponse(data, response.status);
@@ -145,10 +143,7 @@
 			return this.request(`/market/${itemId}/itemmarket`);
 		}
 		async getTimestamp() {
-			console.log("[TornAPI TEST] getTimestamp()");
-			const result = await this.request(`/market/timestamp`);
-			console.log("[TornAPI TEST] getTimestamp RESULT:", result);
-			return result;
+			return this.request(`/market/timestamp`);
 		}
 	};
 	//#endregion
@@ -4594,6 +4589,7 @@
 	}
 	//#endregion
 })();
+
 
 
 
