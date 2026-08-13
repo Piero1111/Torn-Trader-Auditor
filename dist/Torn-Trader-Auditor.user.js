@@ -70,8 +70,8 @@
 			});
 		}
 		performRequest(path) {
-			path.includes("?");
-			const url = "${CONFIG.TORN_API_BASE}${path}${separator}key=" + encodeURIComponent(this.apiKey);
+			const separator = path.includes("?") ? "&" : "?";
+			const url = `${CONFIG.TORN_API_BASE}${path}${separator}key=` + encodeURIComponent(this.apiKey);
 			console.log("[TornAPI] REQUEST:", path);
 			return new Promise((resolve, reject) => {
 				GM_xmlhttpRequest({
@@ -109,11 +109,11 @@
 					},
 					onerror: (error) => {
 						console.error("[TornAPI] ONERROR:", path, error);
-						reject(/* @__PURE__ */ new Error("No se pudo conectar con Torn API: ${path}"));
+						reject(/* @__PURE__ */ new Error(`No se pudo conectar con Torn API: ${path}`));
 					},
 					ontimeout: () => {
 						console.error("[TornAPI] TIMEOUT:", path);
-						reject(/* @__PURE__ */ new Error("Timeout conectando con Torn API: ${path}"));
+						reject(/* @__PURE__ */ new Error(`Timeout conectando con Torn API: ${path}`));
 					}
 				});
 			});
@@ -4571,5 +4571,6 @@
 	}
 	//#endregion
 })();
+
 
 
