@@ -76,8 +76,12 @@
 				console.log("[TornAPI] PDA:", path, "STATUS:", response?.status);
 				let data;
 				try {
-					data = JSON.parse(response.responseText);
-				} catch {
+					console.log("[TornAPI] PDA RAW:", path, "typeof responseText:", typeof response?.responseText, "length:", response?.responseText?.length, "responseText:", response?.responseText);
+					if (typeof response?.responseText === "string") data = JSON.parse(response.responseText);
+					else if (response?.responseText && typeof response.responseText === "object") data = response.responseText;
+					else throw new Error("responseText vacío o inexistente");
+				} catch (error) {
+					console.error("[TornAPI] ERROR JSON PDA:", path, error, response);
 					throw new Error("Respuesta inválida de Torn API");
 				}
 				return this.processResponse(data, response.status);
@@ -4579,6 +4583,7 @@
 	}
 	//#endregion
 })();
+
 
 
 
