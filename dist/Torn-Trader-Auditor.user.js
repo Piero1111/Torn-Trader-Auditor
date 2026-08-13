@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn Trader Auditor
 // @namespace    ShinNamo
-// @version      1.1.1
+// @version      1.0.0
 // @description  Auditor y analizador de precios para Torn
 // @author       ShinNamo
 // @match        https://www.torn.com/*
