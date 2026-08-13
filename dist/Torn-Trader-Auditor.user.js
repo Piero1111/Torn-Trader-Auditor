@@ -32,7 +32,10 @@
 		constructor(apiKey) {
 			console.log("[TornPDA] PDA_httpGet:", typeof PDA_httpGet);
 			if (typeof PDA_httpGet === "function") PDA_httpGet("https://api.torn.com/v2/torn/12/items?key=" + encodeURIComponent(apiKey)).then((response) => {
-				console.log("[TornPDA TEST] PDA_httpGet response:", response);
+				console.log("[TornPDA TEST] response:", response);
+				console.log("[TornPDA TEST] typeof:", typeof response);
+				console.log("[TornPDA TEST] keys:", Object.keys(response || {}));
+				console.log("[TornPDA TEST] JSON:", JSON.stringify(response));
 			}).catch((error) => {
 				console.error("[TornPDA TEST] PDA_httpGet error:", error);
 			});
@@ -4576,6 +4579,7 @@
 	}
 	//#endregion
 })();
+
 
 
 
