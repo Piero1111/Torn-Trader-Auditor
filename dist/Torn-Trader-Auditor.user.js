@@ -30,6 +30,7 @@
 	//#region src/api/torn.js
 	var TornAPI = class {
 		constructor(apiKey) {
+			console.log("[TornPDA] PDA_httpGet:", typeof PDA_httpGet);
 			this.apiKey = apiKey;
 			this.requestQueue = Promise.resolve();
 			this.minRequestInterval = 1e3;
@@ -4571,6 +4572,7 @@
 	}
 	//#endregion
 })();
+
 
 
 
