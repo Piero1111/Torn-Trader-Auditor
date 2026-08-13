@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Torn Trader Auditor
 // @namespace    ShinNamo
-// @version      1.1.0
+// @version      1.1.1
 // @description  Auditor y analizador de precios para Torn
 // @author       ShinNamo
 // @match        https://www.torn.com/*
@@ -30,15 +30,6 @@
 	//#region src/api/torn.js
 	var TornAPI = class {
 		constructor(apiKey) {
-			console.log("[TornPDA] PDA_httpGet:", typeof PDA_httpGet);
-			if (typeof PDA_httpGet === "function") PDA_httpGet("https://api.torn.com/v2/torn/12/items?key=" + encodeURIComponent(apiKey)).then((response) => {
-				console.log("[TornPDA TEST] response:", response);
-				console.log("[TornPDA TEST] typeof:", typeof response);
-				console.log("[TornPDA TEST] keys:", Object.keys(response || {}));
-				console.log("[TornPDA TEST] JSON:", JSON.stringify(response));
-			}).catch((error) => {
-				console.error("[TornPDA TEST] PDA_httpGet error:", error);
-			});
 			this.apiKey = apiKey;
 			this.requestQueue = Promise.resolve();
 			this.minRequestInterval = 1e3;
@@ -4588,6 +4579,7 @@
 	}
 	//#endregion
 })();
+
 
 
 
