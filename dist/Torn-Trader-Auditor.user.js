@@ -72,16 +72,22 @@
 		performRequest(path) {
 			const separator = path.includes("?") ? "&" : "?";
 			const url = `${CONFIG.TORN_API_BASE}${path}${separator}key=` + encodeURIComponent(this.apiKey);
+			console.log("[TornAPI] REQUEST:", path);
 			if (typeof PDA_httpGet === "function") return PDA_httpGet(url).then((response) => {
-				console.log("[TornAPI] PDA:", path, "STATUS:", response?.status);
-				let data;
-				try {
-					console.log("[TornAPI] PDA RAW:", path, "typeof responseText:", typeof response?.responseText, "length:", response?.responseText?.length, "responseText:", response?.responseText);
-					if (typeof response?.responseText === "string") data = JSON.parse(response.responseText);
-					else if (response?.responseText && typeof response.responseText === "object") data = response.responseText;
-					else throw new Error("responseText vacío o inexistente");
+				console.log("[TornAPI] PDA RAW RESPONSE:", path, response);
+				console.log("[TornAPI] PDA RESPONSE KEYS:", path, response ? Object.keys(response) : null);
+				console.log("[TornAPI] PDA STATUS:", path, response?.status);
+				console.log("[TornAPI] PDA RESPONSE TEXT TYPE:", path, typeof response?.responseText);
+				if (!response) throw new Error("PDA no devolvió ninguna respuesta");
+				let data = response.responseText;
+				if (typeof data === "string") try {
+					data = JSON.parse(data);
 				} catch (error) {
-					console.error("[TornAPI] ERROR JSON PDA:", path, error, response);
+					console.error("[TornAPI] PDA JSON ERROR:", path, error, data);
+					throw new Error("Respuesta inválida de Torn API");
+				}
+				else if (data && typeof data === "object") {} else {
+					console.error("[TornAPI] PDA BODY INVÁLIDO:", path, data);
 					throw new Error("Respuesta inválida de Torn API");
 				}
 				return this.processResponse(data, response.status);
@@ -96,7 +102,8 @@
 						let data;
 						try {
 							data = JSON.parse(response.responseText);
-						} catch {
+						} catch (error) {
+							console.error("[TornAPI] GM JSON ERROR:", path, error, response);
 							reject(/* @__PURE__ */ new Error("Respuesta inválida de Torn API"));
 							return;
 						}
@@ -111,6 +118,7 @@
 						reject(/* @__PURE__ */ new Error(`No se pudo conectar con Torn API: ${path}`));
 					},
 					ontimeout: () => {
+						console.error("[TornAPI] GM TIMEOUT:", path);
 						reject(/* @__PURE__ */ new Error("Timeout conectando con Torn API"));
 					}
 				});
@@ -122,7 +130,7 @@
 				error.code = "RATE_LIMIT";
 				throw error;
 			}
-			if (status < 200 || status >= 300) throw new Error(`Torn API HTTP ${status}`);
+			if (typeof status === "number" && (status < 200 || status >= 300)) throw new Error(`Torn API HTTP ${status}`);
 			if (data?.error) {
 				const error = new Error(data.error.error || "Torn API error");
 				if (data.error.error === "Incorrect ID") error.code = "INVALID_ID";
@@ -137,7 +145,10 @@
 			return this.request(`/market/${itemId}/itemmarket`);
 		}
 		async getTimestamp() {
-			return this.request(`/market/timestamp`);
+			console.log("[TornAPI TEST] getTimestamp()");
+			const result = await this.request(`/market/timestamp`);
+			console.log("[TornAPI TEST] getTimestamp RESULT:", result);
+			return result;
 		}
 	};
 	//#endregion
@@ -4583,6 +4594,7 @@
 	}
 	//#endregion
 })();
+
 
 
 
